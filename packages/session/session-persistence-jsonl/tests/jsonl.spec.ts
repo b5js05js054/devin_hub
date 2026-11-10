@@ -2890,3 +2890,35 @@ describe('JsonlSessionPersistence listing concurrency', () => {
     await expect(listingCtx.sessionPersistence.list()).rejects.toBe(earlierSessionFailure)
   })
 })
+
+describe('JsonlSessionPersistence delete', () => {
+  let deleteRoot: string
+  let deleteCtx: Context
+
+  beforeEach(async () => {
+    deleteRoot = await mkdtemp(join(tmpdir(), 'dsh-jsonl-delete-'))
+    deleteCtx = new Context()
+    await deleteCtx.plugin(JsonlSessionPersistence, { root: deleteRoot, compression: 'none' })
+  })
+
+  afterEach(async () => {
+    await deleteCtx.fiber.dispose()
+    await rm(deleteRoot, { recursive: true, force: true })
+  })
+
+  it('removes a stored session, refuses an owned one, and reports a missing one', async () => {
+    const persistence = deleteCtx.sessionPersistence
+    await writeLog(persistence, meta('doomed'), oneTurnLog())
+    await writeLog(persistence, meta('kept'), oneTurnLog())
+
+    const owner = await persistence.open(SessionId('kept'), 'write')
+    await expect(persistence.delete(SessionId('kept'))).rejects.toMatchObject({ name: 'SessionAlreadyOwnedError' })
+    await owner.close()
+
+    await expect(persistence.delete(SessionId('doomed'))).resolves.toBe(true)
+    await expect(persistence.stat(SessionId('doomed'))).resolves.toBeUndefined()
+    await expect(persistence.delete(SessionId('doomed'))).resolves.toBe(false)
+    expect((await persistence.list()).map(entry => entry.header.id)).toEqual([SessionId('kept')])
+    expect((await readAll(persistence, SessionId('kept'))).events.length).toBeGreaterThan(0)
+  })
+})

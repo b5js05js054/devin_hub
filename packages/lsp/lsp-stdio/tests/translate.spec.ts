@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   negotiatePositionEncoding,
+  normalizeDiagnostics,
+  normalizeDocumentSymbols,
   normalizeHover,
   normalizeLocations,
   requestMethod,
@@ -106,6 +108,39 @@ describe('normalizeLocations', () => {
       .toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
     expect(() => normalizeLocations([{ uri: 'file:///a', range: { start: RANGE.start, end: { line: 1.5, character: 5 } } }]))
       .toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
+  })
+})
+
+describe('normalizeDocumentSymbols', () => {
+  it('flattens hierarchical symbols with depth and maps kind numbers to names', () => {
+    const symbols = normalizeDocumentSymbols([
+      { name: 'Foo', kind: 5, range: RANGE, children: [{ name: 'bar', kind: 6, range: RANGE, detail: '(): void' }] },
+    ])
+    expect(symbols.map(s => [s.name, s.kind, s.depth, s.detail])).toEqual([
+      ['Foo', 'Class', 0, undefined],
+      ['bar', 'Method', 1, '(): void'],
+    ])
+  })
+
+  it('accepts SymbolInformation locations, null, and rejects malformed payloads', () => {
+    expect(normalizeDocumentSymbols([{ name: 'x', kind: 12, location: { uri: 'file:///a.ts', range: RANGE } }])[0]?.kind).toBe('Function')
+    expect(normalizeDocumentSymbols(null)).toEqual([])
+    expect(() => normalizeDocumentSymbols({})).toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
+    expect(() => normalizeDocumentSymbols([{ kind: 5 }])).toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
+  })
+})
+
+describe('normalizeDiagnostics', () => {
+  it('maps a full report and treats unchanged as empty', () => {
+    expect(normalizeDiagnostics({ kind: 'full', items: [{ range: RANGE, severity: 2, message: 'w', source: 'ts', code: 2304 }] }))
+      .toEqual([{ range: RANGE, severity: 'warning', message: 'w', source: 'ts', code: '2304' }])
+    expect(normalizeDiagnostics({ kind: 'unchanged', resultId: '1' })).toEqual([])
+  })
+
+  it('defaults a missing severity to error and rejects malformed reports', () => {
+    expect(normalizeDiagnostics({ kind: 'full', items: [{ range: RANGE, message: 'm' }] })[0]?.severity).toBe('error')
+    expect(() => normalizeDiagnostics(null)).toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
+    expect(() => normalizeDiagnostics({ kind: 'full', items: [{ message: 'm' }] })).toThrow(expect.objectContaining({ code: 'LSP_MALFORMED_RESPONSE' }))
   })
 })
 

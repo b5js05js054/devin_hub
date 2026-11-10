@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import {
   desktopBuildRecordFilename,
   resolveDesktopAutoUpdateConfig,
@@ -100,8 +100,14 @@ export function withoutWindowsSigningEnvironment(environment: NodeJS.ProcessEnv)
  */
 export function desktopElectronBuilderEnvironment(environment: NodeJS.ProcessEnv, unsigned: boolean): NodeJS.ProcessEnv {
   const selected: NodeJS.ProcessEnv = { ...environment, DSH_DESKTOP_UNSIGNED: unsigned ? '1' : '0' }
-  // The bundled NSIS decoder cannot extract 7-Zip's automatic ARM64-filtered entries.
-  if (environment.DSH_DESKTOP_TARGET_PLATFORM === 'win32') selected.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
+  if (environment.DSH_DESKTOP_TARGET_PLATFORM === 'win32') {
+    // The bundled NSIS decoder cannot extract 7-Zip's automatic ARM64-filtered entries.
+    selected.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
+    const powerShell = win32.join(environment.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0')
+    const pathName = Object.keys(environment).find(name => name.toLowerCase() === 'path') ?? 'PATH'
+    const path = environment[pathName]
+    selected[pathName] = path === undefined || path === '' ? powerShell : `${path};${powerShell}`
+  }
   if (!unsigned) return selected
   return {
     ...Object.fromEntries(Object.entries(withoutWindowsSigningEnvironment(selected))

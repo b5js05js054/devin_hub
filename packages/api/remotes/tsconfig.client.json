@@ -112,6 +112,12 @@
       "path": "../account-controller"
     },
     {
+      "path": "../relay-controller"
+    },
+    {
+      "path": "../media-controller"
+    },
+    {
       "path": "../../credentials/deepseek-account"
     }
   ]

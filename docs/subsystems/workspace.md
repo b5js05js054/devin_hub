@@ -366,6 +366,13 @@ Host service backing the generated `ctx.remote.workspace` namespace.
 @Remote('archiveSession') archiveSession(request: WorkspaceArchiveSessionRequest): Promise<WorkspaceArchiveValue>
 
 /**
+ * Permanently delete one stored Session and its workspace bookkeeping.
+ * @param request - Session identity to delete.
+ * @returns whether a stored Session was removed.
+ */
+@Remote('deleteSession') deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue>
+
+/**
  * Restore one archived Session to Workspace grouping surfaces.
  * @param request - Session identity to unarchive.
  * @returns the complete resulting archive set.
@@ -428,6 +435,47 @@ Host Remote file reads and workspace directory observations over the composed fi
  * @returns native bytes with the file's version and size at the preceding stat, byte offset, and EOF marker.
  */
 @Remote async readBytes( workspaceFileScope: WorkspaceFileScope, path: string, options: WorkspaceByteReadOptions, signal: AbortSignal, ): Promise<WorkspaceFileBytes>
+
+/**
+ * Replace the complete UTF-8 text of an existing regular file inside the Session's workspace.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - workspace path, absolute or relative to the workspace root; must resolve inside the workspace.
+ * @param content - the complete new file text; must not contain NUL bytes.
+ * @param expectedVersion - the version the caller last read; a different current version refuses the write.
+ * @param signal - caller cancellation.
+ * @returns the written file's identity and the version the write produced.
+ * @throws RemoteError `workspace-file/stale-version` when the file changed since `expectedVersion`.
+ */
+@Remote async write( workspaceFileScope: WorkspaceFileScope, path: string, content: string, expectedVersion: string, signal: AbortSignal, ): Promise<WorkspaceFileStat>
+
+/**
+ * Create one empty file or one directory that does not exist yet, inside the Session's workspace.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - workspace path, absolute or relative; must resolve inside the workspace and name an absent entry.
+ * @param kind - `file` writes an empty file, `directory` creates one directory under an existing parent.
+ * @param signal - caller cancellation.
+ * @returns the created entry's absolute path.
+ * @throws RemoteError `workspace-file/outside-workspace` when the path leaves the workspace.
+ */
+@Remote async createEntry( workspaceFileScope: WorkspaceFileScope, path: string, kind: 'file' | 'directory', signal: AbortSignal, ): Promise<WorkspaceEntryResult>
+
+/**
+ * Move a file or directory to a path that does not exist yet; both ends must stay inside the workspace.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - the existing entry, absolute or workspace-relative; the workspace root itself is refused.
+ * @param newPath - the destination, absolute or workspace-relative; an existing destination is refused, never replaced.
+ * @param signal - caller cancellation.
+ * @returns the destination's absolute path.
+ */
+@Remote async rename( workspaceFileScope: WorkspaceFileScope, path: string, newPath: string, signal: AbortSignal, ): Promise<WorkspaceEntryResult>
+
+/**
+ * Move a file or directory inside the workspace to the Host's recycle bin or trash.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - the existing entry, absolute or workspace-relative; the workspace root itself is refused.
+ * @param signal - caller cancellation.
+ */
+@Remote async trash(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<void>
 
 /**
  * Report one regular file's identity, version, and size without its content.
@@ -547,6 +595,16 @@ insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly Workspac
  * @returns resolution after durability and, with `stopActivity`, after every stop request was issued.
  */
 archiveSession(sessionId: SessionId, options: ArchiveSessionOptions = {}): Promise<void>
+
+/**
+ * Permanently delete one stored session: its durable log, its workspace
+ * membership, and its archive and pin entries. A session loaded in this
+ * process holds the write handle, so it is refused rather than torn down.
+ * @param sessionId - The session to delete.
+ * @returns `true` when a stored session was removed, `false` when none existed.
+ * @throws {WorkspaceLoadedSessionError} when the session is loaded in this process.
+ */
+deleteSession(sessionId: SessionId): Promise<boolean>
 
 /**
  * Unarchive one session durably by dropping it from the registry-global

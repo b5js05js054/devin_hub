@@ -49,7 +49,7 @@ export class ClientTerminals extends Service {
   private readonly bindings = new TerminalBindings()
   private readonly holds = new Map<SessionId, Map<WebTerminalId, TerminalWindowHold>>()
   private readonly releasing = new Set<Promise<void>>()
-  private openTabs: readonly { sessionId: SessionId; tabId: string; contentId: string }[] = []
+  private readonly tabOwners = new Map<string, readonly { sessionId: SessionId; tabId: string; contentId: string }[]>()
 
   /**
    * @param ctx - Client root Context with Gateway and terminal Remote namespace.
@@ -161,10 +161,12 @@ export class ClientTerminals extends Service {
 
   /**
    * Reconcile this window's open terminal occurrences, including dormant saved Sessions.
-   * @param tabs - terminal-kind membership supplied by the sidebar layout owner.
+   * @param tabs - terminal-kind membership supplied by one layout owner.
+   * @param owner - the surface that holds these terminals; each owner replaces only its own membership.
    */
-  retainTabs(tabs: readonly { sessionId: SessionId; tabId: string; contentId: string }[]): void {
-    this.openTabs = tabs
+  retainTabs(tabs: readonly { sessionId: SessionId; tabId: string; contentId: string }[], owner: string = 'sidebar'): void {
+    if (tabs.length === 0) this.tabOwners.delete(owner)
+    else this.tabOwners.set(owner, tabs)
     this.reconcileHolds()
   }
 
@@ -183,7 +185,7 @@ export class ClientTerminals extends Service {
   private reconcileHolds(): void {
     if (this.disposed) return
     const wanted = new Map<SessionId, Set<WebTerminalId>>()
-    for (const tab of this.openTabs) {
+    for (const tab of [...this.tabOwners.values()].flat()) {
       const id = this.bindings.get(tab.sessionId, tab.contentId)
       if (id === undefined || this.closed.has(id)) continue
       let ids = wanted.get(tab.sessionId)

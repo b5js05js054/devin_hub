@@ -20,6 +20,9 @@ import type { SettingsSchemaOperations } from './schema-operations.ts'
  * Any route key walks a dict schema to the same profile node, so the lookup
  * names one that cannot collide with a configured route.
  */
+/** Routes whose credentials the product manages: no API key, no editing. */
+export const isManagedRoute = (provider: string): boolean => provider === 'deepseek-account' || provider === 'relay'
+
 const PROBE_ROUTE = '\u0000probe'
 
 /** One provider row after joining the configurable directory with live routes. */
@@ -71,8 +74,8 @@ export function joinProviderDirectory(
     })
   }
   return rows.toSorted((left, right) =>
-    (left.provider === 'deepseek-account' ? 0 : left.provider === 'deepseek-official' ? 1 : 2)
-      - (right.provider === 'deepseek-account' ? 0 : right.provider === 'deepseek-official' ? 1 : 2))
+    (isManagedRoute(left.provider) ? 0 : left.provider === 'deepseek-official' ? 1 : 2)
+      - (isManagedRoute(right.provider) ? 0 : right.provider === 'deepseek-official' ? 1 : 2))
 }
 
 /** One provider row the page renders. */
@@ -260,18 +263,18 @@ export class ModelsSettingsStore {
         entry,
         configured,
         removable,
-        apiKeyEnv: entry.provider === 'deepseek-account' ? undefined : apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
+        apiKeyEnv: isManagedRoute(entry.provider) ? undefined : apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
         credential: undefined,
       }
     })
-    if (rows.some(row => row.entry.provider === 'deepseek-account')) {
+    if (rows.some(row => isManagedRoute(row.entry.provider))) {
       const catalog = await this.ctx.remote.session.modelCatalog()
       for (const row of rows) {
-        if (row.entry.provider === 'deepseek-account') row.accountAvailable = catalog.ok
-          && catalog.value.groups.some(group => group.id === 'deepseek-account' && group.models.length > 0)
+        if (isManagedRoute(row.entry.provider)) row.accountAvailable = catalog.ok
+          && catalog.value.groups.some(group => group.id === row.entry.provider && group.models.length > 0)
       }
     }
-    const refs = [...new Set(rows.filter(row => row.entry.provider !== 'deepseek-account').flatMap(row =>
+    const refs = [...new Set(rows.filter(row => !isManagedRoute(row.entry.provider)).flatMap(row =>
       row.apiKeyEnv === undefined ? [deriveKeyRef(row.entry.provider), ...row.entry.nativeAuth?.env ?? []] : [row.apiKeyEnv]))]
     const credentials: Record<string, CredentialInfo> = {}
     let credentialError: string | null = null
@@ -290,8 +293,8 @@ export class ModelsSettingsStore {
       s.error = null
       s.credentialError = credentialError
       s.writable = writable
-      s.rows = rows.filter(row => row.entry.provider !== 'deepseek-account' || row.accountAvailable === true).map((row) => {
-        if (row.entry.provider === 'deepseek-account') return row
+      s.rows = rows.filter(row => !isManagedRoute(row.entry.provider) || row.accountAvailable === true).map((row) => {
+        if (isManagedRoute(row.entry.provider)) return row
         const named = row.apiKeyEnv === undefined ? undefined : credentials[row.apiKeyEnv]
         const derived = row.apiKeyEnv !== undefined ? undefined : credentials[deriveKeyRef(row.entry.provider)]
         return {
@@ -340,7 +343,7 @@ export class ModelsSettingsStore {
  */
 export function providerUsable(row: ProviderRow): boolean {
   if (!row.entry.active) return false
-  if (row.entry.provider === 'deepseek-account') return row.accountAvailable === true
+  if (isManagedRoute(row.entry.provider)) return row.accountAvailable === true
   if (row.apiKeyEnv === undefined) return true
   return row.credential?.configured === true
 }

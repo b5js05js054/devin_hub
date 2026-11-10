@@ -8,6 +8,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { Branded } from '@deepseek-ai/dsh-brand'
@@ -227,6 +228,13 @@ export interface SessionInputResolver {
    * @throws when binding is not the currently retained Session generation.
    */
   requestDraftInitialization(binding: SessionBinding, options: DraftInitializationOptions): DraftInitializationResult
+  /**
+   * Insert `@path` mention chips for workspace files into one Session's composer.
+   * @param id - target Session.
+   * @param files - absolute or workspace-relative paths; `directory` marks folder mentions.
+   * @returns false when the Session is unavailable, its composer is mid-submission, or a path cannot be mentioned.
+   */
+  mentionFiles(id: SessionId, files: readonly { readonly path: string; readonly directory: boolean }[]): boolean
 }
 
 /** Initial text for a target Session; attachments remain under their existing owner. */

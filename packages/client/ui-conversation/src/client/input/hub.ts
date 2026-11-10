@@ -20,7 +20,9 @@ import type {
   DraftAttachmentId, DraftAttachmentSerializationResult, DraftInitializationOptions, DraftInitializationResult, InputTriggerController,
   SessionInputResolver, SessionInput, SubmitOutcome,
 } from '../contract/input.ts'
-import type { ComposerKeyboard } from '../contract/draft-editor.ts'
+import type { ComposerKeyboard, ReferenceInsert } from '../contract/draft-editor.ts'
+import { formatFileMention } from '@deepseek-ai/dsh-file-reference/grammar'
+import { relativizeToCwd, workspaceTitleOf } from '@deepseek-ai/dsh-util-workspace-path'
 import type { InputSubmitMode } from '../contract/composer-submission.ts'
 import type { PopupDismissFace } from './facade.ts'
 import { SessionInputShell } from './facade.ts'
@@ -77,6 +79,30 @@ export class InputHub implements SessionInputResolver {
       throw new Error('conversation.input.for requires a retained Session scope')
     }
     return this.shellFor(binding)
+  }
+
+  /**
+   * Insert `@path` mention chips for workspace files after the caret of one Session's composer.
+   * @param id - target Session.
+   * @param files - paths and whether each is a directory.
+   * @returns whether the composer accepted every mention.
+   */
+  mentionFiles(id: SessionId, files: readonly { readonly path: string; readonly directory: boolean }[]): boolean {
+    const sessions = this.sessions()
+    if (sessions.binding(id) === undefined) return false
+    const cwd = sessions.list.getSnapshot().byId[id]?.cwd
+    const references: ReferenceInsert[] = []
+    for (const { path, directory } of files) {
+      const relative = relativizeToCwd(path, cwd)
+      const mention = formatFileMention({ path: directory ? `${relative}/` : relative, kind: 'file' }, false)
+      if (mention === undefined) return false
+      const label = workspaceTitleOf(path) || path
+      references.push({
+        source: 'reference', ref: mention, label: directory ? `${label}/` : label,
+        appearance: directory ? 'folder' : 'file', clipboardText: mention,
+      })
+    }
+    return this.shell(id).addFiles(references, [])
   }
 
   requestDraftInitialization(binding: SessionBinding, options: DraftInitializationOptions): DraftInitializationResult {

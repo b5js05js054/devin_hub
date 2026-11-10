@@ -7,6 +7,16 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { WorkspaceView } from '../types.ts'
 import type { ClientWorkspaceModel, WorkspaceSnapshot } from './model.ts'
 
+/** Permanent Session deletion failed; `rpcError.code === 'workspace/session-loaded'` means the Session is still loaded in the Host. */
+export class WorkspaceDeleteSessionError extends Error {
+  override readonly name = 'WorkspaceDeleteSessionError'
+
+  /** @param rpcError - Host business or folded carrier failure. */
+  constructor(readonly rpcError: RemoteFailure) {
+    super(`workspace session delete failed: ${rpcError.code}: ${rpcError.message}`)
+  }
+}
+
 /** Structured create failure for callers that distinguish Host business errors. */
 export class WorkspaceCreateError extends Error {
   override readonly name = 'WorkspaceCreateError'
@@ -86,6 +96,12 @@ export interface IWorkspaces {
    */
   archiveSession(sessionId: SessionId, options?: { readonly stopActivity?: boolean }): Promise<void>
   /**
+   * Permanently delete a stored Session.
+   * @param sessionId - Session to delete.
+   * @throws when the Host refuses; a Session loaded in the Host fails as `workspace/session-loaded`.
+   */
+  deleteSession(sessionId: SessionId): Promise<void>
+  /**
    * Unarchive a Session from the archived Session list.
    * @param sessionId - Session to unarchive.
    */
@@ -158,6 +174,11 @@ export class WorkspaceController extends Service implements IWorkspaces {
   async archiveSession(sessionId: SessionId, options: { readonly stopActivity?: boolean } = {}): Promise<void> {
     const result = await this.model.archiveSession(sessionId, options)
     if (!result.ok) throw new WorkspaceArchiveError(result.error)
+  }
+
+  async deleteSession(sessionId: SessionId): Promise<void> {
+    const result = await this.model.deleteSession(sessionId)
+    if (!result.ok) throw new WorkspaceDeleteSessionError(result.error)
   }
 
   async unarchiveSession(sessionId: SessionId): Promise<void> {

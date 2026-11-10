@@ -1,0 +1,7 @@
+DevinHub
+DevinHub
+Activate your card key
+Signed in as user@example.test. Enter a card key to unlock model access.
+Enter card key [text]
+Activate and continue [disabled]
+Use another account

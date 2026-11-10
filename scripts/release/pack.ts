@@ -8,8 +8,9 @@
  * ([rationale](../../.agents/notes/implemented/process/2026-08-10-npm-release-sequences.md)).
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join, dirname, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pnpmInvocation } from '../pnpm-invocation.ts'
 import { releaseFamily, tarballName, type ReleaseFamily, type ReleaseMember } from './families.ts'
@@ -18,6 +19,50 @@ import { PUBLISH_ORDER_FILE, packedManifest, tarballFiles } from './tarball.ts'
 
 /** Where pack output lands when `--out` is omitted. */
 const DEFAULT_OUTPUT = 'dist/npm'
+
+/** Opt-in local tarball cache; unset keeps every pack byte-identical to a clean run. */
+const PACK_CACHE_ENV = 'DSH_PACK_CACHE'
+
+/** Directory names that never contribute to a pack. */
+const UNPACKED_DIRECTORIES = new Set(['node_modules', '.git'])
+
+/**
+ * Hash every input a package tarball is built from, so an unchanged member reuses its tarball.
+ * @param member - Member whose directory supplies the packed files.
+ * @returns Hex digest covering the manifest, every packed file, and the pack toolchain marker.
+ */
+function memberFingerprint(member: ReleaseMember): string {
+  const hash = createHash('sha256')
+  hash.update(`dsh-pack-cache-v1\0${member.name}\0${member.version}\0`)
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (UNPACKED_DIRECTORIES.has(entry.name)) continue
+      const path = join(directory, entry.name)
+      const name = relative(member.directory, path).split(sep).join('/')
+      const stats = statSync(path)
+      if (stats.isDirectory()) {
+        hash.update(`d\0${name}\0`)
+        walk(path)
+      } else if (stats.isFile()) {
+        hash.update(`f\0${name}\0${String(stats.size)}\0`)
+        hash.update(readFileSync(path))
+      }
+    }
+  }
+  walk(member.directory)
+  return hash.digest('hex')
+}
+
+/**
+ * Cache path of one member's tarball for its current content.
+ * @param cacheRoot - Absolute cache directory, or undefined to disable reuse.
+ * @param member - Member about to be packed.
+ * @returns Absolute cached tarball path, or undefined when reuse is disabled.
+ */
+function cachedTarballPath(cacheRoot: string | undefined, member: ReleaseMember): string | undefined {
+  if (cacheRoot === undefined) return undefined
+  return join(cacheRoot, `${memberFingerprint(member)}-${tarballName(member)}`)
+}
 
 /**
  * Check one member's expected tarball and its published files.
@@ -48,11 +93,26 @@ async function packMembers(
 ): Promise<string[]> {
   if (concurrency === 1) {
     const order: string[] = []
+    const cacheRoot = process.env[PACK_CACHE_ENV]
+    let reused = 0
     for (const member of members) {
+      const cached = cachedTarballPath(cacheRoot, member)
+      if (cached !== undefined && existsSync(cached)) {
+        copyFileSync(cached, join(destination, tarballName(member)))
+        order.push(validatePackedMember(family, member, destination))
+        reused += 1
+        continue
+      }
       const invocation = pnpmInvocation(['--dir', member.directory, 'pack', '--pack-destination', destination])
       await runConcurrent(invocation.command, invocation.args)
-      order.push(validatePackedMember(family, member, destination))
+      const filename = validatePackedMember(family, member, destination)
+      if (cached !== undefined) {
+        mkdirSync(dirname(cached), { recursive: true })
+        copyFileSync(join(destination, filename), cached)
+      }
+      order.push(filename)
     }
+    if (reused > 0) console.log(`release pack: reused ${String(reused)} cached tarball(s)`)
     return order
   }
   if (members.length === 0) return []

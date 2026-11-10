@@ -108,6 +108,12 @@ export interface SessionPersistenceListOptions {
   readonly signal?: AbortSignal
 }
 
+/** Options for {@link SessionPersistence.delete}. */
+export interface SessionPersistenceDeleteOptions {
+  /** Optional cancellation observed before the removal starts. */
+  readonly signal?: AbortSignal
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sessionPersistence: SessionPersistence
@@ -201,6 +207,19 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Permanently remove one stored session and every artifact it owns. The
+   * session must have no active write handle in any process.
+   * @param id - the stored session to remove.
+   * @param options - optional cancellation.
+   * @returns `true` when a session was removed, `false` when it did not exist.
+   * @throws {SessionAlreadyOwnedError} when an active write handle owns the session.
+   */
+  delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<boolean> {
+    void options
+    return Promise.reject(new Error(`session persistence backend does not support deleting "${id}"`))
+  }
 }
 
 export default SessionPersistence

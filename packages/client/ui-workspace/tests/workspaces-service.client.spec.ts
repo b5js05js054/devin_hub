@@ -217,6 +217,10 @@ class FakeWorkspaces implements IWorkspaces {
     return this.onArchive(sessionId)
   }
 
+  deleteSession(sessionId: SessionId): Promise<void> {
+    return Promise.resolve(void sessionId)
+  }
+
   unarchiveSession(sessionId: SessionId): Promise<void> {
     this.unarchiveCalls.push(sessionId)
     return this.onUnarchive(sessionId)

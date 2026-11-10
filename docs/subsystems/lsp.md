@@ -8,15 +8,15 @@ Source: [`packages/lsp/lsp/src/types.ts`](../../packages/lsp/lsp/src/types.ts)
 
 ## Operations and coordinates
 
-The seam and model expose exactly four semantic queries; the union is closed, so adding one is a compile-enforced change across the seam, providers, and the tool. Positions and ranges are zero-based UTF-16, matching the protocol; the model-facing tool owns the one-based cursor convention and converts on the way in and out.
+The seam and model expose exactly six semantic queries; the union is closed, so adding one is a compile-enforced change across the seam, providers, and the tool. `documentSymbol` and `diagnostics` describe a whole document, so their requests carry a position that providers ignore. Positions and ranges are zero-based UTF-16, matching the protocol; the model-facing tool owns the one-based cursor convention and converts on the way in and out.
 
 ```ts type-equiv
 /**
- * The four semantic queries the seam and model expose. A closed union: adding an operation is a
- * compile-enforced change across the seam, providers, and the tool. Symbols and call hierarchy are
- * not operations here; they need different schemas.
+ * The six semantic queries the seam and model expose. A closed union: adding an operation is a
+ * compile-enforced change across the seam, providers, and the tool. `documentSymbol` and
+ * `diagnostics` take no cursor position; call hierarchy is not an operation here.
  */
-type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover'
+type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover' | 'documentSymbol' | 'diagnostics'
 ```
 
 ```ts type-equiv
@@ -73,7 +73,7 @@ interface LspProviderQuery extends LspQueryRequest {
 
 ## Result
 
-A CLOSED discriminated union: navigation operations normalize to `locations`, `hover` to content or `null`. Consumers `switch` on `kind` to exhaustiveness so a new arm breaks compilation until handled. `findReferences` always includes declarations — the provider enforces this internally, so callers get no flag. The `locations` variant carries `resolvedWorkspaceUri`, the provider's canonical workspace `file:` URI. A caller relativizing location URIs uses that coordinate rather than applying host-platform path rules to the possibly-symlinked request root.
+A CLOSED discriminated union: navigation operations normalize to `locations`, `hover` to content or `null`, `documentSymbol` to `symbols`, and `diagnostics` to `diagnostics`. Consumers `switch` on `kind` to exhaustiveness so a new arm breaks compilation until handled. `findReferences` always includes declarations — the provider enforces this internally, so callers get no flag. The `locations` variant carries `resolvedWorkspaceUri`, the provider's canonical workspace `file:` URI. A caller relativizing location URIs uses that coordinate rather than applying host-platform path rules to the possibly-symlinked request root.
 
 ```ts type-equiv
 /** One resolved location: a document URI and the range within it. */
@@ -96,6 +96,40 @@ interface LspHover {
 ```
 
 ```ts type-equiv
+/** One symbol of a document outline; `depth` is the nesting level (0 = top level). */
+interface LspSymbol {
+  /** The symbol name. */
+  readonly name: string
+  /** The LSP `SymbolKind` name (e.g. `Class`, `Method`), or `Unknown`. */
+  readonly kind: string
+  /** The symbol's full range. */
+  readonly range: LspRange
+  /** Nesting level in the outline. */
+  readonly depth: number
+  /** Extra detail such as a signature, when the server supplied one. */
+  readonly detail?: string
+}
+```
+
+```ts type-equiv
+/** Severity of an {@link LspDiagnostic}. */
+type LspSeverity = 'error' | 'warning' | 'information' | 'hint'
+```
+
+```ts type-equiv
+/** One server-reported problem in a document. */
+interface LspDiagnostic {
+  readonly range: LspRange
+  readonly severity: LspSeverity
+  readonly message: string
+  /** The reporting tool (e.g. `ts`), when supplied. */
+  readonly source?: string
+  /** The diagnostic code, stringified, when supplied. */
+  readonly code?: string
+}
+```
+
+```ts type-equiv
 /**
  * The closed result union. Navigation operations (`goToDefinition`, `findReferences`,
  * `goToImplementation`) normalize to `locations`; `hover` normalizes to content or `null`.
@@ -109,6 +143,8 @@ interface LspHover {
 type LspQueryResult =
   | { readonly kind: 'locations'; readonly locations: readonly LspLocation[]; readonly resolvedWorkspaceUri: string }
   | { readonly kind: 'hover'; readonly hover: LspHover | null }
+  | { readonly kind: 'symbols'; readonly symbols: readonly LspSymbol[] }
+  | { readonly kind: 'diagnostics'; readonly diagnostics: readonly LspDiagnostic[] }
 ```
 
 ## Provider and service
@@ -140,7 +176,7 @@ interface LspProvider {
 ```ts type-equiv
 /**
  * The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query
- * execution; exposes exactly the four operations and no protocol escape hatch.
+ * execution; exposes exactly the six operations and no protocol escape hatch.
  */
 interface LspService {
   /**
@@ -176,7 +212,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.lsp` — `LspService`
 
-The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the four operations and no protocol escape hatch.
+The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the six operations and no protocol escape hatch.
 
 ```ts cordis-catalog
 /**

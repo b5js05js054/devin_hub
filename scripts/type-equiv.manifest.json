@@ -1453,6 +1453,11 @@
     },
     {
       "doc": "docs/subsystems/filesystem.md",
+      "symbol": "FsEditStep",
+      "source": "packages/fs/fs/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/filesystem.md",
       "symbol": "FsEditRequest",
       "source": "packages/fs/fs/src/types.ts"
     },
@@ -1744,6 +1749,21 @@
     {
       "doc": "docs/subsystems/lsp.md",
       "symbol": "LspHover",
+      "source": "packages/lsp/lsp/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/lsp.md",
+      "symbol": "LspSymbol",
+      "source": "packages/lsp/lsp/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/lsp.md",
+      "symbol": "LspSeverity",
+      "source": "packages/lsp/lsp/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/lsp.md",
+      "symbol": "LspDiagnostic",
       "source": "packages/lsp/lsp/src/types.ts"
     },
     {

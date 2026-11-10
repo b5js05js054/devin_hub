@@ -103,6 +103,8 @@ Workspace 注册不意味着拥有其目录。未来的破坏性文件系统操�
 
 归档准入是本包声明并派发的两个宿主事件之上的能力接缝：`workspace/session-activity`（waterfall）向已组合的提供方询问某会话还有什么在跑，`workspace/session-stop`（parallel）请它们停止这些工作。`archiveSession(sessionId)` 只询问一次活动 waterfall，对非空答案以 `WorkspaceActiveSessionError` 拒绝，其 `activity` 按族列出各项——键由各提供方自己合并进本包留空的 `SessionActivityKindMap`；`archiveSession(sessionId, { stopActivity: true })` 跳过活动检查，先写入归档，再派发停止事件，因此持久化的归档集合已经拦住停止所引发的每一次唤醒；提供方抛错只记日志，归档保留。调用在每个提供方的停止请求都已发出后返回，被停止的工作自行收敛。两种询问都在存在性检查之后进行，对已归档 id 从不发生。随附的提供方是 Agent 注册表（运行中的回合）、任务注册表接缝（所属任务）、Subagent runtime（运行中的子孙）与 Schedule 插件（活跃提醒）；没有提供方的组合可自由归档。
 
+`deleteSession(sessionId)` 通过 `SessionPersistence.delete` 永久删除会话，再把该 id 从所属 Workspace 的账目以及归档、置顶集合中移除。删除了会话返回 `true`，会话本就不存在返回 `false`。在本进程中已加载的会话持有写句柄，以 `WorkspaceLoadedSessionError` 拒绝，且不删除任何内容。
+
 ### 源码地图
 
 | 文件 | 职责 |

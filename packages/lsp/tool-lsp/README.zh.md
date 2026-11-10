@@ -31,11 +31,11 @@ kind: "package-reference"
 
 ### 工具
 
-`lsp` 接受 `operation`（`goToDefinition`、`findReferences`、`goToImplementation` 或 `hover`）、`file_path`、`line` 与 `character`。`line` 与 `character` 是正的、从 1 开始的 UTF-16 光标坐标；未落在符号上的位置可能返回空结果。`findReferences` 始终包含声明，因此影响分析绝不会遗漏定义位置。提供方、language id、工作区根目录、限制、超时与可执行文件均不进入模型输入。
+`lsp` 接受 `operation`（`goToDefinition`、`findReferences`、`goToImplementation`、`hover`、`documentSymbol` 或 `diagnostics`）与 `file_path`；除覆盖整个文件的 `documentSymbol` 和 `diagnostics` 外，其余操作还需要 `line` 与 `character`。`line` 与 `character` 是正的、从 1 开始的 UTF-16 光标坐标；未落在符号上的位置可能返回空结果。`diagnostics` 使用服务器的拉取式诊断（`textDocument/diagnostic`），不具备该能力的服务器会报告不支持该操作。`findReferences` 始终包含声明，因此影响分析绝不会遗漏定义位置。提供方、language id、工作区根目录、限制、超时与可执行文件均不进入模型输入。
 
 ### 模型得到什么
 
-导航返回按文件分组的 `path:line:character` 位置行（从 1 开始）；悬停返回规范化文本或无可悬停提示。空位置与无悬停都是成功的无结果响应。结果先由 `maxLocations` 限制，再由 `maxResultChars` 限制，省略与截断标记计入完整上限；这些上限只影响呈现，不影响规范结果值。
+导航返回按文件分组的 `path:line:character` 位置行（从 1 开始）；悬停返回规范化文本或无可悬停提示；`documentSymbol` 返回缩进的 `Kind name (line N)` 大纲；`diagnostics` 返回 `line:character severity [source code] message` 行。空位置、无悬停、无符号与无诊断都是成功的无结果响应。结果先由 `maxLocations` 限制，再由 `maxResultChars` 限制，省略与截断标记计入完整上限；这些上限只影响呈现，不影响规范结果值。
 
 ### 配置
 
@@ -65,7 +65,7 @@ kind: "package-reference"
 
 - **只做消费方。** 工具运行时只注入 `tools`、`lsp` 与 `systemPrompt`，不导入任何提供方，并且只把 `exec.signal` 传给 seam。
 - **坐标转换。** `parseLspArgs` 验证 `line` 与 `character` 是正整数，并转换为 seam 从零开始的位置；渲染出的位置再转回从 1 开始的形式。
-- **规范结果透传。** 工具返回 seam 的封闭联合（`{ kind: 'locations', locations, resolvedWorkspaceUri }` 或 `{ kind: 'hover', hover }`），原生渲染器可以直接检查每个已取得的位置与从零开始的范围。
+- **规范结果透传。** 工具返回 seam 的封闭联合（`{ kind: 'locations', locations, resolvedWorkspaceUri }`、`{ kind: 'hover', hover }`、`{ kind: 'symbols', symbols }` 或 `{ kind: 'diagnostics', diagnostics }`），原生渲染器可以直接检查每个已取得的位置与从零开始的范围。
 - **执行世界 URI 渲染。** `renderUri` 以提供方的规范工作区 URI 为基准解析 `file:` URI——在其内为工作区相对路径，在其外为从 URI 派生的绝对路径，格式错误或非 `file:` 时原样保留——绝不把宿主平台路径规则应用到会话 cwd。
 - **渲染后再设限。** `maxLocations` 先限制条目数量，`maxResultChars` 再限制包含省略或截断标记在内的完整渲染文本。
 - **通用搜索卡片呈现。** `presentLspCall` 渲染 `{ card: 'generic', kind: 'search', title, locations: [{ path, line }] }` 视图；从 args 派生的标题携带操作与从 1 开始的光标，跟随焦点对准查询行，标题则保留列号。
@@ -105,7 +105,7 @@ kind: "package-reference"
 ##### 逐字指引
 
 ```markdown
-Use search/read for ordinary navigation. Use lsp when textual matches are ambiguous or before a change requires precise definitions, implementations, or references. Positions are one-based line and character (UTF-16) at the cursor; an off-symbol position may return no results. findReferences always includes the declaration.
+Use search/read for ordinary navigation. Use lsp when textual matches are ambiguous or before a change requires precise definitions, implementations, or references. Positions are one-based line and character (UTF-16) at the cursor; an off-symbol position may return no results. findReferences always includes the declaration. documentSymbol (file outline) and diagnostics (compiler errors and warnings after an edit) take only file_path.
 ```
 
 #### Token 影响
@@ -134,7 +134,7 @@ Use search/read for ordinary navigation. Use lsp when textual matches are ambigu
 
 #### 模型看到什么
 
-按文件分组的 `path:line:character` 位置行或规范化悬停文本，先由 `maxLocations` 限制，再由 `maxResultChars` 限制；省略与截断标记计入完整字符上限。这些上限只影响原生／模型呈现，不影响规范值。空结果使用不同的 `No results.`／`No hover information.` 行。
+按文件分组的 `path:line:character` 位置行或规范化悬停文本，先由 `maxLocations` 限制，再由 `maxResultChars` 限制；省略与截断标记计入完整字符上限。这些上限只影响原生／模型呈现，不影响规范值。空结果使用不同的 `No results.`／`No hover information.`／`No symbols.`／`No diagnostics.` 行。
 
 #### Token 影响
 

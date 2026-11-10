@@ -14,7 +14,7 @@ import { sep } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, SearchResultView, ToolResult } from '@deepseek-ai/dsh-tools'
 import type { SpillRef } from '@deepseek-ai/dsh-spill'
-import { runRipgrep, toWorkdirRelative, trySaveFormattedResult } from './search-core.ts'
+import { SEARCH_VCS_EXCLUDES, runRipgrep, searchScopeArgs, toWorkdirRelative, trySaveFormattedResult } from './search-core.ts'
 import { globSearchMeta, searchViewFromMeta } from './presentation.ts'
 import { acceptedDirectCallValue } from './direct-call.ts'
 
@@ -24,17 +24,8 @@ import { acceptedDirectCallValue } from './direct-call.ts'
  */
 export const GLOB_MAX_RESULTS = 100
 
-/**
- * Directory names ripgrep must never descend into for a discovery listing: VCS
- * metadata stores. `--no-ignore --hidden` would otherwise surface them in every
- * broad search. Each name is excluded with TWO negated `--glob`s (see
- * {@link buildGlobCommand}): an any-depth directory glob that matches — and
- * prunes — the directory during traversal, and a contents glob that still
- * excludes the internals when the search root itself is at or inside the
- * directory (an explicit `path` of `.git` or `sub/.git`), where the prune glob
- * alone never matches.
- */
-export const GLOB_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']
+/** VCS metadata directories a discovery listing never descends into (shared with `grep`; see {@link searchScopeArgs}). */
+export const GLOB_VCS_EXCLUDES: readonly string[] = SEARCH_VCS_EXCLUDES
 
 /** Resolved glob-tool caps — plugin config after defaulting (see `Config` in index.ts). */
 export interface GlobToolCaps {
@@ -91,16 +82,7 @@ export function buildGlobCommand(input: GlobInput): string[] {
     '--files',
     `--glob=${input.pattern}`,
     '--sort=modified',
-    '--no-ignore',
-    '--hidden',
-    // Two negated globs per VCS name: the bare form prunes the directory
-    // during traversal; the /** form still excludes the contents when the
-    // search root is AT or INSIDE the directory (where the bare form,
-    // matched against root-prefixed paths, never fires).
-    ...GLOB_VCS_EXCLUDES.flatMap(name => [
-      `--glob=!**/${name}`,
-      `--glob=!**/${name}/**`,
-    ]),
+    ...searchScopeArgs(),
   ]
   if (input.path !== undefined) parts.push('--', input.path)
   return parts
@@ -305,7 +287,7 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
   const overCapDescription = caps.sampleOverCapGlobResults ? 'is sampled across top-level entries' : 'keeps the first paths'
   const tool = defineTool({
     name: 'glob',
-    description: 'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. '
+    description: 'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files but skipping VCS metadata, node_modules, dist, and target. '
       + `Returns up to ${caps.maxResults} paths in modification-time order; a larger result ${overCapDescription} `
       + 'and reports where the complete list was saved.',
     parameters: {

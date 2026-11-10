@@ -14,11 +14,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, SearchResultView, ToolResult } from '@deepseek-ai/dsh-tools'
+import { ItemRetainer } from '@deepseek-ai/dsh-output-retention'
 import type { RetainedItems } from '@deepseek-ai/dsh-output-retention'
 import type { SpillRef } from '@deepseek-ai/dsh-spill'
-import type { GrepMatch } from './search-core.ts'
-import { SearchError, previewLine, retainGrepMatches, runRipgrep, toWorkdirRelative, trySaveFormattedResult } from './search-core.ts'
-import { grepSearchMeta, searchViewFromMeta } from './presentation.ts'
+import type { GrepContextLine, GrepMatch } from './search-core.ts'
+import { SearchError, previewLine, retainGlobPaths, retainGrepMatches, runRipgrep, searchScopeArgs, toWorkdirRelative, trySaveFormattedResult } from './search-core.ts'
+import { globSearchMeta, grepSearchMeta, searchViewFromMeta } from './presentation.ts'
 import { acceptedDirectCallValue } from './direct-call.ts'
 
 /**
@@ -53,11 +54,27 @@ export interface GrepToolCaps {
 }
 
 /** Validated `grep` arguments. */
+export type GrepOutputMode = 'content' | 'files' | 'count'
+
+export interface GrepFileCount {
+  path: string
+  count: number
+}
+
+export type GrepResult = { matches: GrepMatch[] } | { files: string[] } | { counts: GrepFileCount[] }
+
 export interface GrepInput {
   pattern: string
   path?: string
-  include?: string
+  include?: string | string[]
+  ignoreCase?: boolean
+  multiline?: boolean
+  contextLines?: number
+  outputMode?: GrepOutputMode
 }
+
+/** Upper bound on `contextLines`, keeping one match's block small. */
+export const GREP_MAX_CONTEXT_LINES = 10
 
 /**
  * Reject an `include` that is not ONE positive glob filter: blank strings,
@@ -86,14 +103,24 @@ function validateInclude(include: string): void {
  * @param args - the schema-validated `grep` arguments.
  * @returns the accepted input, unchanged.
  */
-export function parseGrepArgs(args: { pattern: string; path?: string; include?: string }): GrepInput {
+export function parseGrepArgs(args: { pattern: string; path?: string; include?: string | string[]; ignoreCase?: boolean; multiline?: boolean; contextLines?: number; outputMode?: GrepOutputMode }): GrepInput {
   if (args.pattern.length === 0) throw new Error('pattern must be a non-empty string')
+  if (args.contextLines !== undefined && (!Number.isInteger(args.contextLines) || args.contextLines < 0 || args.contextLines > GREP_MAX_CONTEXT_LINES)) {
+    throw new Error(`contextLines must be an integer from 0 to ${GREP_MAX_CONTEXT_LINES}`)
+  }
   if (args.path !== undefined && args.path.trim().length === 0) throw new Error('path must be a non-empty string when given')
-  if (args.include !== undefined) validateInclude(args.include)
+  if (args.include !== undefined) {
+    if (Array.isArray(args.include) && args.include.length === 0) throw new Error('include must contain at least one glob when given as an array')
+    for (const include of Array.isArray(args.include) ? args.include : [args.include]) validateInclude(include)
+  }
   return {
     pattern: args.pattern,
     ...args.path !== undefined ? { path: args.path } : {},
     ...args.include !== undefined ? { include: args.include } : {},
+    ...args.ignoreCase === true ? { ignoreCase: true } : {},
+    ...args.multiline === true ? { multiline: true } : {},
+    ...args.contextLines !== undefined && args.contextLines > 0 ? { contextLines: args.contextLines } : {},
+    ...args.outputMode !== undefined && args.outputMode !== 'content' ? { outputMode: args.outputMode } : {},
   }
 }
 
@@ -110,7 +137,13 @@ export function parseGrepArgs(args: { pattern: string; path?: string; include?: 
  */
 export function buildGrepCommand(input: GrepInput): string[] {
   const parts = ['--json', `--regexp=${input.pattern}`]
-  if (input.include !== undefined) parts.push(`--glob=${input.include}`)
+  if (input.ignoreCase === true) parts.push('--ignore-case')
+  if (input.multiline === true) parts.push('--multiline')
+  if (input.contextLines !== undefined) parts.push(`--context=${input.contextLines}`)
+  if (input.include !== undefined) {
+    for (const include of Array.isArray(input.include) ? input.include : [input.include]) parts.push(`--glob=${include}`)
+  }
+  parts.push(...searchScopeArgs())
   if (input.path !== undefined) parts.push('--', input.path)
   return parts
 }
@@ -131,7 +164,7 @@ function malformedRecord(detail: string, cause?: unknown): SearchError {
  * UTF-8 (ripgrep sends base64 `bytes` instead of `text`) yields a placeholder
  * preview rather than failing the whole search.
  */
-function parseRecord(line: string): GrepMatch | undefined {
+function parseRecord(line: string, withContext: boolean): (GrepMatch & { isContext: boolean }) | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(line)
@@ -140,9 +173,11 @@ function parseRecord(line: string): GrepMatch | undefined {
   }
   if (typeof parsed !== 'object' || parsed === null) throw malformedRecord('a record is not an object')
   const record = parsed as { type?: unknown; data?: unknown }
-  // Non-match record types (begin/end/context/summary — and any future type)
-  // are transport framing, not results: skipped, not malformed.
-  if (record.type !== 'match') return undefined
+  // Framing record types (begin/end/summary — and any future type) are not
+  // results: skipped, not malformed. `context` records are consumed only when
+  // the caller asked for context lines.
+  const isContext = record.type === 'context'
+  if (record.type !== 'match' && !(isContext && withContext)) return undefined
   if (typeof record.data !== 'object' || record.data === null) throw malformedRecord('a match record has no data')
   const data = record.data as { path?: unknown; line_number?: unknown; lines?: unknown }
   const pathText = typeof data.path === 'object' && data.path !== null ? (data.path as { text?: unknown }).text : undefined
@@ -151,29 +186,74 @@ function parseRecord(line: string): GrepMatch | undefined {
   if (typeof data.lines !== 'object' || data.lines === null) throw malformedRecord('a match record has no line content')
   const lines = data.lines as { text?: unknown; bytes?: unknown }
   if (typeof lines.text === 'string') {
-    return { path: pathText, lineNumber: data.line_number, line: lines.text.replace(/\r?\n$/, '') }
+    return { path: pathText, lineNumber: data.line_number, line: lines.text.replace(/\r?\n$/, ''), isContext }
   }
   if (typeof lines.bytes === 'string') {
-    return { path: pathText, lineNumber: data.line_number, line: '(line is not valid UTF-8)' }
+    return { path: pathText, lineNumber: data.line_number, line: '(line is not valid UTF-8)', isContext }
   }
   throw malformedRecord('a match record has neither line text nor bytes')
 }
 
 /**
  * Parse complete `rg --json` stdout into flat matches, in output order (ripgrep
- * emits one file's matches contiguously). Only `match` records are consumed.
+ * emits one file's matches contiguously). With `contextLines`, `context`
+ * records attach to the nearest match: a line within `contextLines` after the
+ * previous match of the same file is that match's `after`; any other pending
+ * context line is the next match's `before`.
  *
  * @param stdout - the complete raw `rg --json` stdout.
+ * @param contextLines - the `--context` width the search ran with; omit to ignore context records.
  * @returns the flat matches; empty for output with no match records.
  */
-export function parseGrepMatches(stdout: string): GrepMatch[] {
+export function parseGrepMatches(stdout: string, contextLines?: number): GrepMatch[] {
   const matches: GrepMatch[] = []
+  let pending: GrepContextLine[] = []
   for (const line of stdout.split('\n')) {
     if (line.length === 0) continue
-    const match = parseRecord(line)
-    if (match !== undefined) matches.push(match)
+    const record = parseRecord(line, contextLines !== undefined)
+    if (record === undefined) continue
+    const { isContext, ...entry } = record
+    const previous = matches.at(-1)
+    if (isContext) {
+      const item = { lineNumber: entry.lineNumber, line: entry.line }
+      if (previous !== undefined && previous.path === entry.path && entry.lineNumber > previous.lineNumber
+        && entry.lineNumber - previous.lineNumber <= (contextLines ?? 0)) {
+        previous.after = [...previous.after ?? [], item]
+      } else pending.push(item)
+      continue
+    }
+    if (pending.length > 0) entry.before = pending
+    pending = []
+    matches.push(entry)
   }
   return matches
+}
+
+export function grepFileCounts(matches: readonly GrepMatch[]): GrepFileCount[] {
+  const counts = new Map<string, number>()
+  for (const match of matches) counts.set(match.path, (counts.get(match.path) ?? 0) + 1)
+  return Array.from(counts, ([path, count]) => ({ path, count }))
+}
+
+function retainCounts(counts: GrepFileCount[], maxItems: number): RetainedItems<GrepFileCount> {
+  const retainer = new ItemRetainer<GrepFileCount>({ kind: 'head', maxItems })
+  for (const count of counts) retainer.push(count)
+  return retainer.finish()
+}
+
+function formatGrepFiles(retained: RetainedItems<string>, spillRef?: SpillRef): string {
+  if (retained.seen === 0) return 'No matches found'
+  const header = retained.truncated ? `Showing ${retained.kept} of ${retained.seen} files with matches` : `Found ${retained.seen} ${retained.seen === 1 ? 'file' : 'files'} with matches`
+  const recovery = spillRef !== undefined ? `\n\n(Full grep result stored at: ${spillRef.locator}. ${spillRef.retrievalHint})` : ''
+  return `${header}\n\n${retained.items.join('\n')}${recovery}`
+}
+
+function formatGrepCounts(retained: RetainedItems<GrepFileCount>, total: number, spillRef?: SpillRef): string {
+  if (total === 0) return 'No matches found'
+  const files = retained.seen
+  const header = retained.truncated ? `Showing ${retained.kept} of ${files} files; ${total} ${matchNoun(total)} total` : `Found ${total} ${matchNoun(total)} in ${files} ${files === 1 ? 'file' : 'files'}`
+  const recovery = spillRef !== undefined ? `\n\n(Full grep result stored at: ${spillRef.locator}. ${spillRef.retrievalHint})` : ''
+  return `${header}\n\n${retained.items.map(item => `${item.path}: ${item.count}`).join('\n')}${recovery}`
 }
 
 /** `match` / `matches` for a count. */
@@ -197,7 +277,12 @@ export function formatGrepMatches(matches: GrepMatch[]): string {
   }
   const sections: string[] = []
   for (const [path, group] of byFile) {
-    sections.push(`${path}\n${group.map(m => `Line ${m.lineNumber}: ${m.line}`).join('\n')}`)
+    const rows = group.flatMap(m => [
+      ...(m.before ?? []).map(c => `Line ${c.lineNumber}- ${c.line}`),
+      `Line ${m.lineNumber}: ${m.line}`,
+      ...(m.after ?? []).map(c => `Line ${c.lineNumber}- ${c.line}`),
+    ])
+    sections.push(`${path}\n${rows.join('\n')}`)
   }
   return sections.join('\n\n')
 }
@@ -224,6 +309,12 @@ export function formatGrepOutput(retained: RetainedItems<GrepMatch>, spillRef: S
   return `${header}\n\n${body}\n\n(${recovery})`
 }
 
+function renderGrepResult(value: GrepResult, caps: GrepToolCaps, spillRef?: SpillRef): string {
+  if ('matches' in value) return formatRetainedGrep(retainGrepMatches(value.matches, caps.maxMatches, caps.maxLineBytes), spillRef)
+  if ('files' in value) return formatGrepFiles(retainGlobPaths(value.files, caps.maxMatches), spillRef)
+  return formatGrepCounts(retainCounts(value.counts, caps.maxMatches), value.counts.reduce((sum, item) => sum + item.count, 0), spillRef)
+}
+
 /** Format one already-retained match list for the Native surface. */
 function formatRetainedGrep(retained: RetainedItems<GrepMatch>, spillRef?: SpillRef): string {
   if (retained.seen === 0) return 'No matches found'
@@ -237,9 +328,9 @@ function formatRetainedGrep(retained: RetainedItems<GrepMatch>, spillRef?: Spill
  * @param args - the raw tool arguments; `pattern`, `path`, and `include` feed the title.
  * @returns the generic card view (`kind: 'search'`) shown while the call runs.
  */
-export function presentGrepCall(args: { pattern: string; path?: string; include?: string }): GenericCallView {
+export function presentGrepCall(args: { pattern: string; path?: string; include?: string | string[] }): GenericCallView {
   const where = args.path !== undefined ? ` in ${args.path}` : ''
-  const filter = args.include !== undefined ? ` (${args.include})` : ''
+  const filter = args.include !== undefined ? ` (${Array.isArray(args.include) ? args.include.join(', ') : args.include})` : ''
   return { card: 'generic', title: `Grep ${args.pattern}${where}${filter}`, kind: 'search', rawInput: args.pattern }
 }
 
@@ -255,12 +346,12 @@ export function presentGrepCall(args: { pattern: string; path?: string; include?
  * @returns the search card view, or `undefined` for the generic fallback.
  */
 export function presentGrepResult(
-  _args: { pattern: string; path?: string; include?: string },
+  _args: { pattern: string; path?: string; include?: string | string[]; outputMode?: GrepOutputMode },
   result: ToolResult,
 ): SearchResultView | undefined {
   if (result.isError) return undefined
   const view = searchViewFromMeta(result.meta)
-  if (view === undefined || view.shape !== 'matches') return undefined
+  if (view === undefined || (view.shape !== 'matches' && view.shape !== 'paths')) return undefined
   return view
 }
 
@@ -283,55 +374,84 @@ export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
 
   const tool = defineTool({
     name: 'grep',
-    description: 'Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. '
+    description: 'Search file contents with a ripgrep regular expression, including hidden and ignored files but skipping VCS metadata, node_modules, dist, and target. Returns matching lines with line numbers, grouped by file. '
       + `Returns up to ${caps.maxMatches} matches; a larger result reports where the complete match list was saved.`,
     parameters: {
       pattern: { type: 'string', required: true, description: 'Regular expression to search for (ripgrep syntax).' },
       path: { type: 'string', description: 'File or directory to search. Defaults to the session workspace; a relative path resolves against it.' },
-      include: { type: 'string', description: 'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.' },
+      include: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'One glob or an array of globs for which files to search (e.g. "*.ts", ["*.ts", "*.tsx"]). Negation and comma-separated strings are not supported.' },
+      ignoreCase: { type: 'boolean', description: 'Match case-insensitively. Defaults to false.' },
+      multiline: { type: 'boolean', description: 'Let the pattern match across line breaks ("." also matches a newline). Defaults to false.' },
+      contextLines: { type: 'integer', description: `Unmatched lines to show before and after each match (0-${GREP_MAX_CONTEXT_LINES}); shown as "Line N- text". Defaults to 0.` },
+      outputMode: { type: 'string', enum: ['content', 'files', 'count'], description: 'content returns matching lines (default), files returns each matching file once, count returns each file and its match count.' },
     },
     timeoutMs: caps.timeoutMs,
     output: {
       schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          matches: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                path: { type: 'string', required: true },
-                lineNumber: { type: 'integer', required: true },
-                line: { type: 'string', required: true },
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              matches: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: 'string', required: true },
+                    lineNumber: { type: 'integer', required: true },
+                    line: { type: 'string', required: true },
+                    before: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { lineNumber: { type: 'integer', required: true }, line: { type: 'string', required: true } } } },
+                    after: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { lineNumber: { type: 'integer', required: true }, line: { type: 'string', required: true } } } },
+                  },
+                },
               },
             },
           },
-        },
+          { type: 'object', additionalProperties: false, properties: { files: { type: 'array', required: true, items: { type: 'string' } } } },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              counts: {
+                type: 'array',
+                required: true,
+                items: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, count: { type: 'integer', required: true } } },
+              },
+            },
+          },
+        ],
       },
-      render: (_args, value) => [{
-        type: 'text',
-        text: formatRetainedGrep(retainGrepMatches(value.matches, caps.maxMatches, caps.maxLineBytes)),
-      }],
-      presentationMeta: (_args, value) =>
-        grepSearchMeta(retainGrepMatches(value.matches, caps.maxMatches, caps.maxLineBytes), caps.maxMetaBytes),
+      render: (_args, value) => [{ type: 'text', text: renderGrepResult(value, caps) }],
+      presentationMeta: (_args, value) => {
+        if ('matches' in value) return grepSearchMeta(retainGrepMatches(value.matches, caps.maxMatches, caps.maxLineBytes), caps.maxMetaBytes)
+        if ('files' in value) {
+          const retained = retainGlobPaths(value.files, caps.maxMatches)
+          return globSearchMeta(retained, caps.maxMetaBytes)
+        }
+        return null
+      },
     },
     async execute(args, exec) {
       const input = parseGrepArgs(args)
       const run = await runRipgrep(ctx, exec, 'grep', buildGrepCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes)
-      if (run.noMatches) return { matches: [] }
+      if (run.noMatches) return input.outputMode === 'files' ? { files: [] } : input.outputMode === 'count' ? { counts: [] } : { matches: [] }
 
       const all: GrepMatch[] = []
-      for (const raw of parseGrepMatches(run.stdout)) {
+      for (const raw of parseGrepMatches(run.stdout, input.contextLines)) {
         const match: GrepMatch = {
           path: toWorkdirRelative(raw.path, run.workdir),
           lineNumber: raw.lineNumber,
           line: raw.line,
+          ...raw.before !== undefined ? { before: raw.before } : {},
+          ...raw.after !== undefined ? { after: raw.after } : {},
         }
         all.push(match)
       }
+      if (input.outputMode === 'files') return { files: [...new Set(all.map(match => match.path))] }
+      if (input.outputMode === 'count') return { counts: grepFileCounts(all) }
       return { matches: all }
     },
     presentCall: presentGrepCall,
@@ -341,25 +461,17 @@ export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    const value = acceptedDirectCallValue(ctx, tool, exec, result, decision) as { matches: GrepMatch[] } | undefined
+    const value = acceptedDirectCallValue(ctx, tool, exec, result, decision) as GrepResult | undefined
     if (value === undefined) return decision
-    const matches = value.matches
-    if (matches.length <= caps.maxMatches) return decision
-    // The spill artifact holds the COMPLETE result: preview each line, but keep
-    // every match (no inline cap), so the recovery file is the full search.
-    const previewedAll = matches.map(match => ({ ...match, line: previewLine(match.line, caps.maxLineBytes) }))
-    const spillRef = await trySaveFormattedResult(
-      ctx,
-      exec,
-      'grep-results.txt',
-      `Found ${matches.length} ${matchNoun(matches.length)}\n\n${formatGrepMatches(previewedAll)}`,
-    )
+    const count = 'matches' in value ? value.matches.length : 'files' in value ? value.files.length : value.counts.length
+    if (count <= caps.maxMatches) return decision
+    const complete = 'matches' in value
+      ? `Found ${value.matches.length} ${matchNoun(value.matches.length)}\n\n${formatGrepMatches(value.matches.map(match => ({ ...match, line: previewLine(match.line, caps.maxLineBytes) })))}`
+      : 'files' in value ? value.files.join('\n') : value.counts.map(item => `${item.path}: ${item.count}`).join('\n')
+    const spillRef = await trySaveFormattedResult(ctx, exec, 'grep-results.txt', complete)
     return {
       kind: 'accept',
-      content: [{
-        type: 'text',
-        text: formatRetainedGrep(retainGrepMatches(matches, caps.maxMatches, caps.maxLineBytes), spillRef),
-      }],
+      content: [{ type: 'text', text: renderGrepResult(value, caps, spillRef) }],
       ...decision.additionalContexts !== undefined ? { additionalContexts: decision.additionalContexts } : {},
     }
   })

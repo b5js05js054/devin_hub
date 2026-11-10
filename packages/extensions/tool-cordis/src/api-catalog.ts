@@ -1198,6 +1198,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the outcome, including the version the write produced.',
       },
       {
+        signature: 'makeDirectory(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>',
+        description: 'Create one directory whose parent already exists. Providers that cannot create directories keep this default refusal.',
+        parameters: [{ name: 'target', description: 'the resolved, absent directory target.' }, { name: 'signal', description: 'aborts before the directory is created.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root a sandboxing backend fences by.' }],
+        throws: ['FsError `FS_IO_ERROR` when the target exists or the provider lacks support.'],
+      },
+      {
+        signature: 'rename(from: FsTarget, to: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>',
+        description: 'Move a file or directory to an absent path. Providers that cannot rename keep this default refusal.',
+        parameters: [{ name: 'from', description: 'the resolved existing source.' }, { name: 'to', description: 'the resolved destination, which must not exist.' }, { name: 'signal', description: 'aborts before the move.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root a sandboxing backend fences by.' }],
+        throws: ['FsError `FS_IO_ERROR` when the destination exists or the provider lacks support.'],
+      },
+      {
+        signature: 'trash(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>',
+        description: 'Move a file or directory to the host\'s recycle bin or trash. Providers without a trash keep this default refusal rather than deleting permanently.',
+        parameters: [{ name: 'target', description: 'the resolved existing entry.' }, { name: 'signal', description: 'aborts the trash command.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root a sandboxing backend fences by.' }],
+        throws: ['FsError `FS_IO_ERROR` when the provider has no trash.'],
+      },
+      {
         signature: 'abstract editText( target: FsTarget, edit: FsEditRequest, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsEditOutcome>',
         description: 'Atomically edit literal text. When supplied, the version guard is checked before matching so stale content reports `FS_STALE_VERSION`; omission edits the current content without a freshness precondition.',
         parameters: [{ name: 'target', description: 'the resolved target to edit.' }, { name: 'edit', description: 'the literal search/replace request.' }, { name: 'expected', description: 'the version guard; omit for an unconditional edit.' }, { name: 'signal', description: 'aborts before atomic publication takes effect.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root this edit runs under; a sandboxing backend fences the edit by it, the bare backend ignores it. Omit to leave the backend its own default.' }],
@@ -1530,7 +1548,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'lsp',
     summary: 'The LSP capability seam (`ctx.lsp`).',
-    description: 'The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the four operations and no protocol escape hatch.',
+    description: 'The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the six operations and no protocol escape hatch.',
     methods: [
       {
         signature: 'registerProvider(provider: LspProvider): () => void',
@@ -1556,6 +1574,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register one server and expose resource tools while that scope has providers.',
         parameters: [{ name: 'server', description: 'configured server name, unique in this scope.' }, { name: 'provider', description: 'connection-owned resource operations.' }],
         returns: 'the effect disposer for this exact registration.',
+      },
+    ],
+  },
+  {
+    key: 'mediaController',
+    summary: 'Media model parameter spec lookup and the values chosen per session and model.',
+    description: 'Media model parameter spec lookup and the values chosen per session and model.',
+    methods: [
+      {
+        signature: '@Remote async getSpec(model: string): Promise<MediaSpecResult>',
+        description: 'Ask the relay which parameters a model accepts.',
+        parameters: [{ name: 'model', description: 'model id as listed by the relay.' }],
+        returns: 'the spec, or why there is none (`not-media` for chat models).',
+      },
+      {
+        signature: '@Remote setParams(sessionId: string, model: string, params: MediaParams): void',
+        description: 'Remember the parameters the next generation of this model in this session should use.',
+        parameters: [{ name: 'sessionId', description: 'session whose requests carry the parameters.' }, { name: 'model', description: 'media model the values belong to.' }, { name: 'params', description: 'chosen values; an empty object clears the choice.' }],
+      },
+      {
+        signature: 'paramsOf(sessionId: string, model: string): MediaParams | undefined',
+        description: 'Look up the media parameters chosen for one session and model.',
+        parameters: [{ name: 'sessionId', description: 'session issuing the request.' }, { name: 'model', description: 'model being called.' }],
+        returns: 'the chosen values, or `undefined` when none were set.',
       },
     ],
   },
@@ -1925,6 +1967,153 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'relayAccount',
+    summary: 'Account service of the relay backend.',
+    description: 'Account service of the relay backend. `getToken` is Host-only: no view returned by this service carries the session token.',
+    methods: [
+      {
+        signature: 'async getState(): Promise<RelayAccountView>',
+        description: 'Read the stored sign-in session.',
+        parameters: [],
+        returns: 'session snapshot without the token.',
+      },
+      {
+        signature: 'async getToken(): Promise<string | undefined>',
+        description: 'Host-only session token for relay and license requests.',
+        parameters: [],
+        returns: 'the bearer token, or undefined while signed out or expired.',
+      },
+      {
+        signature: 'getOrigin(): string',
+        description: 'Read the configured relay backend origin.',
+        parameters: [],
+        returns: 'the configured backend origin; \'\' while unconfigured. Host-only.',
+      },
+      {
+        signature: 'async checkUpdate(): Promise<RelayUpdateInfo | null>',
+        description: 'Read the release the operator published for this platform.',
+        parameters: [],
+        returns: 'the release, or null when none is enabled or none exists for this platform.',
+        throws: ['RelayAccountError `signed-out` without a session; `network`, `rejected`, or `invalid-response` from the backend.'],
+      },
+      {
+        signature: 'async login(email: string, password: string): Promise<RelayAccountView>',
+        description: 'Sign in with email and password.',
+        parameters: [{ name: 'email', description: 'account email.' }, { name: 'password', description: 'account password.' }],
+        returns: 'the new snapshot.',
+        throws: ['RelayAccountError on network, rejection, or malformed response.'],
+      },
+      {
+        signature: 'async register(email: string, password: string, avatar?: RelayImageInput): Promise<RelayAccountView>',
+        description: 'Register and sign in; upload progress is observable through `getState().upload`.',
+        parameters: [{ name: 'email', description: 'account email.' }, { name: 'password', description: 'account password.' }, { name: 'avatar', description: 'optional avatar image, png/jpg/gif/webp up to 5 MB.' }],
+        returns: 'the new snapshot.',
+        throws: ['RelayAccountError `invalid-image` for an unsupported or oversized avatar, otherwise as {@link login}.'],
+      },
+      {
+        signature: 'async startSignIn(): Promise<RelayAccountView>',
+        description: 'Begin browser authorization (OAuth code + PKCE) against the website; returns immediately. Progress and the page to open are observable through `getState().signIn`; success stores the session.',
+        parameters: [],
+        returns: 'the snapshot, with `signIn.authorizeUrl` set; an already-running attempt is joined.',
+        throws: ['RelayAccountError `not-configured` without a backend origin.'],
+      },
+      {
+        signature: 'cancelSignIn(): void',
+        description: 'Abandon a running browser sign-in; idle is a no-op.',
+        parameters: [],
+      },
+      {
+        signature: 'async refresh(): Promise<RelayAccountView>',
+        description: 'Re-validate the stored session against the backend; an unauthorized answer signs out locally.',
+        parameters: [],
+        returns: 'the refreshed snapshot.',
+        throws: ['RelayAccountError `signed-out` without a session; `network` keeps the session.'],
+      },
+      {
+        signature: 'async logout(): Promise<void>',
+        description: 'Remove the local session and the local background of that user.',
+        parameters: [],
+      },
+      {
+        signature: 'async setBackground(bytes: Uint8Array): Promise<void>',
+        description: 'Store a custom background for the signed-in user.',
+        parameters: [{ name: 'bytes', description: 'image content, png/jpg/gif/webp up to 5 MB.' }],
+        throws: ['RelayAccountError `signed-out` or `invalid-image`.'],
+      },
+      {
+        signature: 'async clearBackground(): Promise<void>',
+        description: 'Remove the signed-in user\'s custom background; absent is a no-op.',
+        parameters: [],
+      },
+      {
+        signature: 'async readBackground(): Promise<RelayBackground | undefined>',
+        description: 'Read the signed-in user\'s stored background image.',
+        parameters: [],
+        returns: 'the background image, or undefined when none is stored.',
+      },
+    ],
+  },
+  {
+    key: 'relayLicense',
+    summary: 'Card-key license service; lifecycle follows the signed-in relay account.',
+    description: 'Card-key license service; lifecycle follows the signed-in relay account.',
+    methods: [
+      {
+        signature: 'async getState(): Promise<RelayLicenseView>',
+        description: 'Read the stored card-key license.',
+        parameters: [],
+        returns: 'license snapshot without the token or the full card key.',
+      },
+      {
+        signature: 'async activate(cardKey: string): Promise<RelayLicenseOutcome>',
+        description: 'Activate a card key for this device; requires a signed-in relay account.',
+        parameters: [{ name: 'cardKey', description: 'card key, case-insensitive.' }],
+        returns: 'outcome with the backend message.',
+      },
+      {
+        signature: 'async restore(): Promise<boolean>',
+        description: 'Re-adopt a card key the signed-in account already bound to this device, so signing in again needs no card entry.',
+        parameters: [],
+        returns: 'whether a license was restored; any refusal or network failure leaves the state unchanged.',
+      },
+      {
+        signature: 'async refresh(): Promise<boolean>',
+        description: 'Renew the license token. Network failures and a signed-out account keep the old token; only an explicit backend refusal deactivates.',
+        parameters: [],
+        returns: 'whether the license is valid afterwards.',
+      },
+      {
+        signature: 'async getCredentials(): Promise<LicenseCredentials | undefined>',
+        description: 'Material for one relay request: a fresh token plus card key and device id. An expired token renews synchronously; a token within five minutes of expiry renews in the background.',
+        parameters: [],
+        returns: 'credentials, or undefined while not activated.',
+      },
+      {
+        signature: 'async refreshBalance(): Promise<void>',
+        description: 'Fetch the latest balance; failures are silent and keep the previous figure.',
+        parameters: [],
+      },
+      {
+        signature: 'async redeem(code: string): Promise<RelayLicenseOutcome>',
+        description: 'Redeem a top-up code onto the activated card.',
+        parameters: [{ name: 'code', description: 'top-up code, case-insensitive.' }],
+        returns: 'outcome with the backend message.',
+      },
+      {
+        signature: 'async usage(days: number = 30, page: number = 1, pageSize: number = 20): Promise<unknown>',
+        description: 'Query usage totals, per-day model spend and call details; the backend JSON is returned unchanged.',
+        parameters: [{ name: 'days', description: 'window in days, clamped to 1..90 (default 30).' }, { name: 'page', description: '1-based page, minimum 1.' }, { name: 'pageSize', description: 'rows per page, clamped to 1..100 (default 20).' }],
+        returns: 'backend JSON.',
+        throws: ['RelayAccountError `rejected` when not activated, when the backend refuses, or when an old backend has no usage route.'],
+      },
+      {
+        signature: 'async deactivate(): Promise<void>',
+        description: 'Clear the local license, keeping the device id.',
+        parameters: [],
+      },
+    ],
+  },
+  {
     key: 'remoteAccess',
     summary: 'Registry of access policies, the Gateway\'s access decisions, list filtering, and the per-Peer access snapshot.',
     description: 'Registry of access policies, the Gateway\'s access decisions, list filtering, and the per-Peer access snapshot. Every composition that mounts the Gateway mounts this service too.',
@@ -2262,6 +2451,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
+      },
+      {
+        signature: 'delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<boolean>',
+        description: 'Permanently remove one stored session and every artifact it owns. The session must have no active write handle in any process.',
+        parameters: [{ name: 'id', description: 'the stored session to remove.' }, { name: 'options', description: 'optional cancellation.' }],
+        returns: '`true` when a session was removed, `false` when it did not exist.',
+        throws: ['{SessionAlreadyOwnedError} when an active write handle owns the session.'],
       },
     ],
   },
@@ -3844,6 +4040,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete resulting archive set.',
       },
       {
+        signature: '@Remote(\'deleteSession\') deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue>',
+        description: 'Permanently delete one stored Session and its workspace bookkeeping.',
+        parameters: [{ name: 'request', description: 'Session identity to delete.' }],
+        returns: 'whether a stored Session was removed.',
+      },
+      {
         signature: '@Remote(\'unarchiveSession\') unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<WorkspaceArchiveValue>',
         description: 'Restore one archived Session to Workspace grouping surfaces.',
         parameters: [{ name: 'request', description: 'Session identity to unarchive.' }],
@@ -3885,6 +4087,31 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read a complete regular file or one byte range without text decoding.',
         parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'target path, absolute or workspace-relative; relative to the base file\'s directory when provided.' }, { name: 'options', description: 'optional base file and range; without a range the complete-file cap applies.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'native bytes with the file\'s version and size at the preceding stat, byte offset, and EOF marker.',
+      },
+      {
+        signature: '@Remote async write( workspaceFileScope: WorkspaceFileScope, path: string, content: string, expectedVersion: string, signal: AbortSignal, ): Promise<WorkspaceFileStat>',
+        description: 'Replace the complete UTF-8 text of an existing regular file inside the Session\'s workspace.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'workspace path, absolute or relative to the workspace root; must resolve inside the workspace.' }, { name: 'content', description: 'the complete new file text; must not contain NUL bytes.' }, { name: 'expectedVersion', description: 'the version the caller last read; a different current version refuses the write.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the written file\'s identity and the version the write produced.',
+        throws: ['RemoteError `workspace-file/stale-version` when the file changed since `expectedVersion`.'],
+      },
+      {
+        signature: '@Remote async createEntry( workspaceFileScope: WorkspaceFileScope, path: string, kind: \'file\' | \'directory\', signal: AbortSignal, ): Promise<WorkspaceEntryResult>',
+        description: 'Create one empty file or one directory that does not exist yet, inside the Session\'s workspace.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'workspace path, absolute or relative; must resolve inside the workspace and name an absent entry.' }, { name: 'kind', description: '`file` writes an empty file, `directory` creates one directory under an existing parent.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the created entry\'s absolute path.',
+        throws: ['RemoteError `workspace-file/outside-workspace` when the path leaves the workspace.'],
+      },
+      {
+        signature: '@Remote async rename( workspaceFileScope: WorkspaceFileScope, path: string, newPath: string, signal: AbortSignal, ): Promise<WorkspaceEntryResult>',
+        description: 'Move a file or directory to a path that does not exist yet; both ends must stay inside the workspace.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'the existing entry, absolute or workspace-relative; the workspace root itself is refused.' }, { name: 'newPath', description: 'the destination, absolute or workspace-relative; an existing destination is refused, never replaced.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the destination\'s absolute path.',
+      },
+      {
+        signature: '@Remote async trash(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<void>',
+        description: 'Move a file or directory inside the workspace to the Host\'s recycle bin or trash.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'the existing entry, absolute or workspace-relative; the workspace root itself is refused.' }, { name: 'signal', description: 'caller cancellation.' }],
       },
       {
         signature: '@Remote async stat(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceFileStat>',
@@ -3953,6 +4180,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Archive one session durably. The session must exist (live or in session persistence); its workspace accounting — or lack of one — is irrelevant. Without `stopActivity` the session must also be inactive: the `workspace/session-activity` waterfall is asked once, and any reported activity rejects with WorkspaceActiveSessionError before anything is written. With `stopActivity` the archive is written without an activity check, and the `workspace/session-stop` providers are then asked to stop the session\'s work: the durable archive set is what a provider\'s `agent/pre-step` gate reads, so every wake the stops induce is already blocked. Archiving drops the session\'s pin in the same durable write (pinning and archival are mutually exclusive). An already archived id resolves without writing, asking, or stopping.',
         parameters: [{ name: 'sessionId', description: 'The session to archive.' }, { name: 'options', description: 'Whether running work is stopped instead of refusing.' }],
         returns: 'resolution after durability and, with `stopActivity`, after every stop request was issued.',
+      },
+      {
+        signature: 'deleteSession(sessionId: SessionId): Promise<boolean>',
+        description: 'Permanently delete one stored session: its durable log, its workspace membership, and its archive and pin entries. A session loaded in this process holds the write handle, so it is refused rather than torn down.',
+        parameters: [{ name: 'sessionId', description: 'The session to delete.' }],
+        returns: '`true` when a stored session was removed, `false` when none existed.',
+        throws: ['{WorkspaceLoadedSessionError} when the session is loaded in this process.'],
       },
       {
         signature: 'unarchiveSession(sessionId: SessionId): Promise<void>',
@@ -4411,6 +4645,22 @@ export const EVENT_API: readonly EventApiEntry[] = [
     signature: '\'plugin-market/changed\'(): void',
     summary: 'The configured index sources changed.',
     description: 'The configured index sources changed.',
+    parameters: [],
+  },
+  {
+    name: 'relay-account/changed',
+    mode: 'emit',
+    signature: '\'relay-account/changed\'(): void',
+    summary: 'Session, profile, or background changed.',
+    description: 'Session, profile, or background changed.',
+    parameters: [],
+  },
+  {
+    name: 'relay-license/changed',
+    mode: 'emit',
+    signature: '\'relay-license/changed\'(): void',
+    summary: 'License state or balance changed.',
+    description: 'License state or balance changed.',
     parameters: [],
   },
   {
@@ -5531,7 +5781,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'FsEditRequest',
-    declaration: 'export interface FsEditRequest {\n    oldString: string;\n    newString: string;\n    replaceAll: boolean;\n}',
+    declaration: 'export interface FsEditRequest extends FsEditStep {\n    then?: readonly FsEditStep[] | undefined;\n}',
+  },
+  {
+    name: 'FsEditStep',
+    declaration: 'export interface FsEditStep {\n    oldString: string;\n    newString: string;\n    replaceAll: boolean;\n}',
   },
   {
     name: 'FsInfo',
@@ -5898,6 +6152,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface KvUnitDescriptor {\n    readonly name: string;\n    readonly version: number;\n    readonly tables: readonly string[];\n    readonly hasGlobal: boolean;\n    readonly layout?: \'single\' | \'per-record\';\n    readonly compatibleVersions?: readonly number[];\n}',
   },
   {
+    name: 'LicenseCredentials',
+    declaration: 'export interface LicenseCredentials {\n    readonly token: string;\n    readonly cardKey: string;\n    readonly deviceId: string;\n}',
+  },
+  {
     name: 'LlmAdapter',
     declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined;\n    imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
@@ -5986,6 +6244,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type LogExporterOptions = Omit<OTLPExporterNodeConfigBase, \'selfObsMeterProvider\'> & {\n    url: string;\n};',
   },
   {
+    name: 'LspDiagnostic',
+    declaration: 'export interface LspDiagnostic {\n    readonly range: LspRange;\n    readonly severity: LspSeverity;\n    readonly message: string;\n    readonly source?: string;\n    readonly code?: string;\n}',
+  },
+  {
     name: 'LspHover',
     declaration: 'export interface LspHover {\n    readonly contents: string;\n    readonly range?: LspRange;\n}',
   },
@@ -5995,7 +6257,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LspOperation',
-    declaration: 'export type LspOperation = \'goToDefinition\' | \'findReferences\' | \'goToImplementation\' | \'hover\';',
+    declaration: 'export type LspOperation = \'goToDefinition\' | \'findReferences\' | \'goToImplementation\' | \'hover\' | \'documentSymbol\' | \'diagnostics\';',
   },
   {
     name: 'LspPosition',
@@ -6019,11 +6281,19 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LspQueryResult',
-    declaration: 'export type LspQueryResult = {\n    readonly kind: \'locations\';\n    readonly locations: readonly LspLocation[];\n    readonly resolvedWorkspaceUri: string;\n} | {\n    readonly kind: \'hover\';\n    readonly hover: LspHover | null;\n};',
+    declaration: 'export type LspQueryResult = {\n    readonly kind: \'locations\';\n    readonly locations: readonly LspLocation[];\n    readonly resolvedWorkspaceUri: string;\n} | {\n    readonly kind: \'hover\';\n    readonly hover: LspHover | null;\n} | {\n    readonly kind: \'symbols\';\n    readonly symbols: readonly LspSymbol[];\n} | {\n    readonly kind: \'diagnostics\';\n    readonly diagnostics: readonly LspDiagnostic[];\n};',
   },
   {
     name: 'LspRange',
     declaration: 'export interface LspRange {\n    readonly start: LspPosition;\n    readonly end: LspPosition;\n}',
+  },
+  {
+    name: 'LspSeverity',
+    declaration: 'export type LspSeverity = \'error\' | \'warning\' | \'information\' | \'hint\';',
+  },
+  {
+    name: 'LspSymbol',
+    declaration: 'export interface LspSymbol {\n    readonly name: string;\n    readonly kind: string;\n    readonly range: LspRange;\n    readonly depth: number;\n    readonly detail?: string;\n}',
   },
   {
     name: 'ManagementError',
@@ -6120,6 +6390,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'McpResourceRequest',
     declaration: 'export type McpResourceRequest = {\n    method: \'resources/list\' | \'resources/templates/list\';\n    cursor?: string;\n} | {\n    method: \'resources/read\';\n    uri: string;\n};',
+  },
+  {
+    name: 'MediaField',
+    declaration: 'export interface MediaField {\n    readonly key: string;\n    readonly label: string;\n    readonly type: \'select\' | \'number\';\n    readonly options?: readonly string[] | undefined;\n    readonly min?: number | undefined;\n    readonly max?: number | undefined;\n    readonly default: string | number | null;\n    readonly required: boolean;\n}',
+  },
+  {
+    name: 'MediaParams',
+    declaration: 'export type MediaParams = Readonly<Record<string, string | number>>;',
+  },
+  {
+    name: 'MediaSpec',
+    declaration: 'export interface MediaSpec {\n    readonly kind: \'image\' | \'video\';\n    readonly source: \'upstream\' | \'builtin\';\n    readonly fields: readonly MediaField[];\n}',
+  },
+  {
+    name: 'MediaSpecResult',
+    declaration: 'export type MediaSpecResult = {\n    readonly ok: true;\n    readonly spec: MediaSpec;\n} | {\n    readonly ok: false;\n    readonly code: \'not-media\' | \'not-activated\' | \'unavailable\';\n    readonly message: string;\n};',
   },
   {
     name: 'Message',
@@ -6668,6 +6954,50 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'Registry',
     declaration: 'export type Registry = string | null;',
+  },
+  {
+    name: 'RelayAccountErrorCode',
+    declaration: 'export type RelayAccountErrorCode = \'not-configured\' | \'network\' | \'unauthorized\' | \'rejected\' | \'invalid-response\' | \'invalid-image\' | \'signed-out\' | \'storage\';',
+  },
+  {
+    name: 'RelayAccountProfile',
+    declaration: 'export interface RelayAccountProfile {\n    readonly id: number;\n    readonly email: string;\n    readonly avatarUrl: string | null;\n}',
+  },
+  {
+    name: 'RelayAccountView',
+    declaration: 'export interface RelayAccountView {\n    readonly status: \'signed-out\' | \'signed-in\';\n    readonly profile: RelayAccountProfile | null;\n    readonly expiresAt: string | null;\n    readonly upload: RelayUploadProgress;\n    readonly signIn: RelaySignInView;\n    readonly hasBackground: boolean;\n}',
+  },
+  {
+    name: 'RelayBackground',
+    declaration: 'export interface RelayBackground {\n    readonly mime: string;\n    readonly bytes: Uint8Array;\n}',
+  },
+  {
+    name: 'RelayImageInput',
+    declaration: 'export interface RelayImageInput {\n    readonly bytes: Uint8Array;\n    readonly filename: string;\n}',
+  },
+  {
+    name: 'RelayLicenseOutcome',
+    declaration: 'export interface RelayLicenseOutcome {\n    readonly ok: boolean;\n    readonly message: string;\n}',
+  },
+  {
+    name: 'RelayLicenseView',
+    declaration: 'export interface RelayLicenseView {\n    readonly activated: boolean;\n    readonly valid: boolean;\n    readonly cardKey: string;\n    readonly deviceId: string;\n    readonly deviceName: string;\n    readonly cardExpiresAt: string | null;\n    readonly durationDays: number;\n    readonly billingEnabled: boolean;\n    readonly balance: number;\n    readonly currency: string;\n    readonly message: string;\n}',
+  },
+  {
+    name: 'RelaySignInView',
+    declaration: 'export interface RelaySignInView {\n    readonly phase: \'idle\' | \'waiting-browser\' | \'exchanging\' | \'failed\';\n    readonly authorizeUrl?: string;\n    readonly code?: RelayAccountErrorCode;\n}',
+  },
+  {
+    name: 'RelayUpdateInfo',
+    declaration: 'export interface RelayUpdateInfo {\n    readonly version: string;\n    readonly url: string;\n    readonly sha256: string;\n    readonly mandatory: boolean;\n    readonly note: string;\n}',
+  },
+  {
+    name: 'RelayUploadPhase',
+    declaration: 'export type RelayUploadPhase = \'idle\' | \'uploading\' | \'processing\' | \'done\' | \'error\';',
+  },
+  {
+    name: 'RelayUploadProgress',
+    declaration: 'export interface RelayUploadProgress {\n    readonly phase: RelayUploadPhase;\n    readonly sent: number;\n    readonly total: number;\n    readonly code?: RelayAccountErrorCode;\n}',
   },
   {
     name: 'Reload',
@@ -7300,6 +7630,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionPersistenceCreateOptions',
     declaration: 'export interface SessionPersistenceCreateOptions {\n    readonly signal?: AbortSignal;\n    readonly inheritedEventCount?: SessionLogOffset;\n}',
+  },
+  {
+    name: 'SessionPersistenceDeleteOptions',
+    declaration: 'export interface SessionPersistenceDeleteOptions {\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'SessionPersistenceListOptions',
@@ -8774,6 +9108,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface WorkspaceDeleteRequest {\n    readonly workspaceId: WorkspaceId;\n}',
   },
   {
+    name: 'WorkspaceDeleteSessionRequest',
+    declaration: 'export interface WorkspaceDeleteSessionRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'WorkspaceDeleteSessionValue',
+    declaration: 'export interface WorkspaceDeleteSessionValue {\n    readonly deleted: boolean;\n}',
+  },
+  {
     name: 'WorkspaceDeleteValue',
     declaration: 'export interface WorkspaceDeleteValue {\n    readonly deleted: true;\n}',
   },
@@ -8788,6 +9130,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceDirectoryListing',
     declaration: 'export interface WorkspaceDirectoryListing {\n    readonly path: string;\n    readonly entries: readonly WorkspaceDirectoryEntry[];\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'WorkspaceEntryResult',
+    declaration: 'export interface WorkspaceEntryResult {\n    readonly absolutePath: string;\n}',
   },
   {
     name: 'WorkspaceFileBytes',

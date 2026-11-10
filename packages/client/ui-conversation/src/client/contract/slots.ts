@@ -276,6 +276,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'conversation.input.left': { kind: 'list'; scope: 'session' }
     /** Compact controls before the composer submit action. */
     'conversation.input.right': { kind: 'list'; scope: 'session' }
+    /** Parameter controls for the selected image or video model, placed beside the model selector. */
+    'conversation.input.media': { kind: 'list'; scope: 'session' }
     /** Compact action after the model selector; it can expand across the toolbar while retaining the editor and submit action. */
     'conversation.input.activity': { kind: 'single'; scope: 'session'; owner: InputActivityOwnerProps }
     /** Resident composer body, including the no-Session inert state. */
@@ -501,7 +503,7 @@ export type ComposerBarProps =
     | 'conversation.input.attachments' | 'conversation.input.overlay'
     | 'conversation.input.permission'
     | 'conversation.input.left' | 'conversation.input.plan'
-    | 'conversation.input.right' | 'conversation.input.model' | 'conversation.input.activity'
+    | 'conversation.input.right' | 'conversation.input.media' | 'conversation.input.model' | 'conversation.input.activity'
     | 'conversation.composer.dock'
   >
   & InjectFace<ComposerBarInjected>

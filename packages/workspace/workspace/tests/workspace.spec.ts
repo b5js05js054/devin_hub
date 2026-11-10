@@ -16,6 +16,7 @@ import { MemoryMediaPool, MemoryStorageBackend } from '../../../storage/storage-
 import WorkspaceRegistry, {
   WorkspaceId,
   type workspaceDomainState,
+  WorkspaceLoadedSessionError,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
 } from '../src/index.ts'
@@ -56,7 +57,12 @@ async function harness(options: HarnessOptions = {}) {
     listed.map(header => ({ header, revision: SessionPersistenceRevision(`rev-${header.id}`) })))
   const open = vi.fn(() => { throw new Error('event bodies must not be opened') })
   const stat = vi.fn(() => { throw new Error('per-session stat must not be needed') })
-  ctx.provide('sessionPersistence', { list, open, stat } as never)
+  const remove = vi.fn(async (id: SessionId): Promise<boolean> => {
+    const had = listed.some(header => header.id === id)
+    listed = listed.filter(header => header.id !== id)
+    return had
+  })
+  ctx.provide('sessionPersistence', { list, open, stat, delete: remove } as never)
 
   if (options.sessionStore === true) {
     await ctx.plugin(SessionStore)
@@ -1050,6 +1056,41 @@ describe('workspace mutation and status', () => {
     await writeFile(dir, 'now a file')
     expect(await workspace.status()).toBe('missing-dir')
     expect(registry.get(workspace.id)).toBe(workspace)
+  })
+})
+
+describe('registry-global session delete', () => {
+  it('removes the stored session and cleans archive, pin, and workspace membership', async () => {
+    const dir = await makeDir('delete-home')
+    const result = await harness({ sessions: [header('keep', dir, 100), header('doomed', dir, 200)] })
+    const workspace = result.registry.list()[0]!
+    await result.registry.pinSession(SessionId('doomed'))
+    expect(workspace.sessionIds).toContain('doomed')
+
+    await expect(result.registry.deleteSession(SessionId('doomed'))).resolves.toBe(true)
+    expect(workspace.sessionIds).not.toContain('doomed')
+    expect(workspace.sessionIds).toContain('keep')
+    expect(result.registry.pinnedSessionIds).toEqual([])
+    expect(storedState(result.pool).pinnedSessionIds).toEqual([])
+  })
+
+  it('drops an archived entry and reports a session that no longer exists', async () => {
+    const dir = await makeDir('delete-archived')
+    const result = await harness({ sessions: [header('old', dir, 100)] })
+    await result.registry.archiveSession(SessionId('old'))
+
+    await expect(result.registry.deleteSession(SessionId('old'))).resolves.toBe(true)
+    expect(result.registry.archivedSessionIds).toEqual([])
+    await expect(result.registry.deleteSession(SessionId('old'))).resolves.toBe(false)
+  })
+
+  it('refuses a session loaded in this process without deleting it', async () => {
+    const dir = await makeDir('delete-loaded')
+    const loaded = header('loaded', dir, 100)
+    const result = await harness({ sessions: [loaded], liveSessions: [loaded] })
+
+    await expect(result.registry.deleteSession(SessionId('loaded'))).rejects.toBeInstanceOf(WorkspaceLoadedSessionError)
+    expect((await result.list()).map(snapshot => snapshot.header.id)).toContain('loaded')
   })
 })
 

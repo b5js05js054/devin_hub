@@ -2,36 +2,72 @@ import type { ProductEvent } from '@deepseek-ai/dsh-client-product-analytics/typ
 /** Native welcome operations using the shared Web authentication and RPC APIs. */
 
 import { randomUUID } from 'node:crypto'
-import { desktopAccountBackend, type DesktopAccountBackend } from './account-backend.ts'
+import { parseRelayUpdate, type RelayUpdate } from './relay-update.ts'
+import type { RelayWelcomeActivation, RelayWelcomeError, RelayWelcomeState } from './welcome-api.ts'
 
 /** Metadata needed before the native entry or workspace becomes visible. */
 export interface WelcomeState {
-  readonly loggedIn: boolean
-  readonly hasApiKey: boolean
-  readonly writable: boolean
+  /** Relay account signed in; an activation card or balance is only needed per model, not to enter. */
+  readonly relayReady: boolean
   readonly localePreference: string | null
+}
+
+/** Relay account operations over the Host's `relay` namespace. */
+export interface DesktopRelayBackend {
+  /** @returns the current relay account and card-key state. */
+  state(): Promise<RelayWelcomeState>
+  /** @returns state after starting a browser sign-in; a refused start shows as a failed attempt. */
+  start(): Promise<RelayWelcomeState>
+  /** @returns state after abandoning the running browser sign-in. */
+  cancel(): Promise<RelayWelcomeState>
+  /** @param cardKey - card key to bind. @returns the backend outcome. */
+  activate(cardKey: string): Promise<RelayWelcomeActivation>
+  /** @returns state after signing out. */
+  signOut(): Promise<RelayWelcomeState>
 }
 
 /** Narrow operations available to the native welcome flow. */
 export interface DesktopWelcomeBackend {
   /** @returns the current Host policy; every read observes live configuration. */
   analyticsEnabled(): Promise<boolean>
-  readonly account: DesktopAccountBackend
+  readonly relay: DesktopRelayBackend
+  /** @returns the client release published by the backend, or null when none exists or the lookup failed. */
+  checkUpdate(): Promise<RelayUpdate | null>
   /** @param event - desktop-owned fields. @returns after local Host intake. */
   report(event: ProductEvent): Promise<void>
-  /** @returns Configured-key presence and the shared language preference, without credential values. */
+  /** @returns relay readiness and the shared language preference. */
   read(): Promise<WelcomeState>
   /** @returns The saved UI language without account or provider requests. */
   readLocalePreference(): Promise<string | null>
-  /**
-   * @param apiKey - User-entered official provider key.
-   * @returns A safe write outcome without provider diagnostics.
-   */
-  save(apiKey: string): Promise<{ ok: boolean }>
 }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function errorOf(code: unknown): RelayWelcomeError {
+  return code === 'not-configured' || code === 'network' ? code : code === 'rejected' ? 'rejected' : 'failed'
+}
+
+function relayState(value: unknown): RelayWelcomeState {
+  if (!record(value) || !record(value.account) || typeof value.configured !== 'boolean') throw new Error('desktop welcome: invalid relay state')
+  const account = value.account
+  const signIn = record(account.signIn) ? account.signIn : { phase: 'idle' }
+  const profile = record(account.profile) ? account.profile : undefined
+  const license = record(value.license) ? value.license : undefined
+  const phase = signIn.phase === 'waiting-browser' || signIn.phase === 'exchanging' || signIn.phase === 'failed' ? signIn.phase : 'idle'
+  return {
+    configured: value.configured,
+    signedIn: account.status === 'signed-in',
+    email: typeof profile?.email === 'string' ? profile.email : '',
+    signIn: {
+      phase,
+      ...(typeof signIn.authorizeUrl === 'string' ? { authorizeUrl: signIn.authorizeUrl } : {}),
+      ...(phase === 'failed' ? { error: errorOf(signIn.code) } : {}),
+    },
+    licensed: license?.valid === true,
+    licenseMessage: typeof license?.message === 'string' ? license.message : '',
+  }
 }
 
 /**
@@ -43,7 +79,6 @@ function record(value: unknown): value is Record<string, unknown> {
 export async function connectDesktopWelcome(
   authenticatedUrl: string,
   send: (input: string, init?: RequestInit) => Promise<Response>,
-  cookies: () => Promise<string> = () => Promise.resolve(''),
 ): Promise<DesktopWelcomeBackend> {
   const origin = new URL(authenticatedUrl).origin
   const authenticated = await send(authenticatedUrl, { credentials: 'include' })
@@ -68,16 +103,28 @@ export async function connectDesktopWelcome(
     }
     return envelope.result.value
   }
-  const account = desktopAccountBackend(origin, invoke, cookies)
-  const settingsAndReference = async () => {
-    const settings = await invoke({ namespace: 'settings', method: 'describe', args: {} })
-    if (!record(settings) || !Array.isArray(settings.namespaces)) throw new Error('desktop welcome: missing settings namespaces')
-    const official: unknown = settings.namespaces.find((item: unknown) => record(item) && item.ns === 'llm-deepseek')
-    if (official === undefined) return { settings: { namespaces: settings.namespaces }, ref: undefined }
-    if (!record(official) || !record(official.value) || typeof official.value.apiKeyEnv !== 'string') {
-      throw new Error('desktop welcome: missing official DeepSeek credential reference')
-    }
-    return { settings: { namespaces: settings.namespaces }, ref: official.value.apiKeyEnv }
+  const relayCommand = async (method: string, args: Record<string, unknown> = {}): Promise<unknown> => invoke({ namespace: 'relay', method, args })
+  const relay: DesktopRelayBackend = {
+    async state() { return relayState(await relayCommand('getState')) },
+    async start() {
+      const result = await relayCommand('startSignIn')
+      const state = relayState(await relayCommand('getState'))
+      if (record(result) && result.ok === false) return { ...state, signIn: { phase: 'failed', error: errorOf(result.code) } }
+      return state
+    },
+    async cancel() {
+      await relayCommand('cancelSignIn')
+      return relayState(await relayCommand('getState'))
+    },
+    async activate(cardKey) {
+      const outcome = await relayCommand('activate', { cardKey })
+      if (!record(outcome) || typeof outcome.ok !== 'boolean' || typeof outcome.message !== 'string') throw new Error('desktop welcome: invalid activation outcome')
+      return { ok: outcome.ok, message: outcome.message }
+    },
+    async signOut() {
+      await relayCommand('logout')
+      return relayState(await relayCommand('getState'))
+    },
   }
   const localePreference = (namespaces: unknown[]): string | null => {
     const locale: unknown = namespaces.find((item: unknown) => record(item) && item.ns === 'locale')
@@ -87,64 +134,24 @@ export async function connectDesktopWelcome(
     }
     return locale.value.preference ?? null
   }
-  const read = async (): Promise<WelcomeState> => {
-    const { settings, ref } = await settingsAndReference()
-    const providers = await invoke({ namespace: 'llm', method: 'listConfigurableProviders', args: {} })
-    if (!Array.isArray(providers)) throw new Error('desktop welcome: invalid provider directory')
-    const namespaces = settings.namespaces
-    const refs = providers.flatMap((provider: unknown) => {
-      if (!record(provider) || typeof provider.settingsNs !== 'string' || !Array.isArray(provider.settingsPath)) {
-        throw new Error('desktop welcome: invalid provider settings address')
-      }
-      const namespace: unknown = namespaces.find((item: unknown) => record(item) && item.ns === provider.settingsNs)
-      let value: unknown = record(namespace) ? namespace.value : undefined
-      for (const key of provider.settingsPath as unknown[]) {
-        if (typeof key !== 'string') throw new Error('desktop welcome: invalid provider settings path')
-        value = record(value) ? value[key] : undefined
-      }
-      return record(value) && typeof value.apiKeyEnv === 'string' ? [value.apiKeyEnv] : []
-    })
-    const unique = [...new Set([...(ref === undefined ? [] : [ref]), ...refs])]
-    const states: Record<string, unknown> = {}
-    // credentials.describe accepts at most 64 references per request.
-    for (let offset = 0; offset < unique.length; offset += 64) {
-      const batch = await invoke({ namespace: 'credentials', method: 'describe', args: { refs: unique.slice(offset, offset + 64) } })
-      if (!record(batch)) throw new Error('desktop welcome: invalid credential metadata')
-      Object.assign(states, batch)
-    }
-    if (ref !== undefined && !record(states[ref])) throw new Error('desktop welcome: missing credential metadata')
-    return {
-      loggedIn: (await account.state()).status === 'credential-stored',
-      hasApiKey: Object.values(states).some(value => record(value) && value.configured === true),
-      writable: ref !== undefined && record(states[ref]) && states[ref].writable === true,
-      localePreference: localePreference(namespaces),
-    }
+  const describeSettings = async (): Promise<unknown[]> => {
+    const settings = await invoke({ namespace: 'settings', method: 'describe', args: {} })
+    if (!record(settings) || !Array.isArray(settings.namespaces)) throw new Error('desktop welcome: missing settings namespaces')
+    return settings.namespaces
   }
   return {
-    account,
-    read,
+    relay,
+    async read() {
+      const [state, namespaces] = await Promise.all([relay.state(), describeSettings()])
+      return { relayReady: state.signedIn, localePreference: localePreference(namespaces) }
+    },
+    async checkUpdate() { return parseRelayUpdate(await relayCommand('checkUpdate')) },
     async analyticsEnabled() {
       const enabled = await invoke({ namespace: 'productAnalytics', method: 'enabled', args: {} }, AbortSignal.timeout(1000))
       if (typeof enabled !== 'boolean') throw new Error('desktop analytics: invalid collection policy')
       return enabled
     },
     async report(event) { await invoke({ namespace: 'productAnalytics', method: 'report', args: { event } }, AbortSignal.timeout(1000)) },
-    async readLocalePreference() {
-      const settings = await invoke({ namespace: 'settings', method: 'describe', args: {} })
-      if (!record(settings) || !Array.isArray(settings.namespaces)) throw new Error('desktop welcome: missing settings namespaces')
-      return localePreference(settings.namespaces)
-    },
-    async save(apiKey) {
-      if (!/^[\x21-\x7e]+$/.test(apiKey)) return { ok: false }
-      try {
-        const { ref } = await settingsAndReference()
-        if (ref === undefined) return { ok: false }
-        await invoke({ namespace: 'credentials', method: 'set', args: { ref, value: apiKey } })
-        return { ok: true }
-      } catch {
-        // Provider diagnostics may contain credentials; the native form owns failure copy.
-        return { ok: false }
-      }
-    },
+    async readLocalePreference() { return localePreference(await describeSettings()) },
   }
 }

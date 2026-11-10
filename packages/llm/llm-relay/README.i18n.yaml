@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/llm/llm-relay/README.md
+/:
+  en: 4209f26735333cab
+  zh: 625e408c49339d0a
+/deepseek-ai-dsh-llm-relay:
+  en: b3fe7ab8db554f64
+  zh: 7cbbab90998f6506
+/deepseek-ai-dsh-llm-relay/summary:
+  en: 8c1305eec78f87e6
+  zh: 4d4c5e0d1e25756c
+/deepseek-ai-dsh-llm-relay/table-of-contents:
+  en: 2fee9973f19f9401
+  zh: be4649a45bb273d9
+/deepseek-ai-dsh-llm-relay/use-this-package:
+  en: 3bb276bb226214bd
+  zh: e509518bbd7432d8
+/deepseek-ai-dsh-llm-relay/understand-the-implementation:
+  en: 6391d072669c2c08
+  zh: f5418462979e1e42
+/deepseek-ai-dsh-llm-relay/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-llm-relay/model-experience/relay-model-requests:
+  en: 5d2d27ad175eb57a
+  zh: 27443176bcc3ffd9
+/deepseek-ai-dsh-llm-relay/model-experience/relay-model-requests/what-the-model-sees:
+  en: 2d971391aa8a42d0
+  zh: 6e6fe153a8719f42
+/deepseek-ai-dsh-llm-relay/model-experience/relay-model-requests/token-effect:
+  en: 7f75190dbd6dc6eb
+  zh: 4564d7357b9204e8
+/deepseek-ai-dsh-llm-relay/model-experience/relay-model-requests/kv-cache-effect:
+  en: 302c92f8230374ba
+  zh: 09d1c9b623bf16b7
+/deepseek-ai-dsh-llm-relay/known-limitations-and-deferred-work:
+  en: d354b6e0b14ef713
+  zh: 98fe708b788f450c

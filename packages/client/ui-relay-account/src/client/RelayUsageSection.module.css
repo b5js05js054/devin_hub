@@ -1,0 +1,31 @@
+.section { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; font-size: 13px; line-height: 22px; color: var(--dsw-alias-label-primary); }
+.row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tab { padding: 4px 12px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-state-business-primary); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 12px 16px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
+.value { font-size: 18px; line-height: 28px; font-weight: 500; overflow-wrap: anywhere; }
+.card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px 16px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
+.title { margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
+.secondary { margin: 0; color: var(--dsw-alias-label-tertiary); }
+.error { margin: 0; color: var(--dsw-alias-state-danger-primary, var(--dsw-alias-label-primary)); }
+.notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.tableWrap { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { padding: 6px 8px; text-align: right; font-weight: 400; white-space: nowrap; border-bottom: 0.5px solid var(--dsw-alias-border-l4); }
+.table th[scope='col']:first-child, .table th[scope='row'] { text-align: left; }
+.table th[scope='col'] { color: var(--dsw-alias-label-tertiary); }
+.table tbody tr:last-child > * { border-bottom: 0; }
+.recordsTable { min-width: 880px; }
+.recordsTable th[scope='col']:first-child, .recordsTable td:first-child { text-align: left; }
+.recordsTable th[scope='row'] { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.recordsTable th[scope='row'] > span:first-child { display: block; overflow: hidden; text-overflow: ellipsis; }
+.time, .cost { font-variant-numeric: tabular-nums; }
+.markers { display: block; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+.pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.pageActions { display: flex; gap: 8px; margin-left: auto; }
+@media (max-width: 520px) {
+  .pageActions { width: 100%; margin-left: 0; }
+  .pageActions > * { flex: 1; }
+}

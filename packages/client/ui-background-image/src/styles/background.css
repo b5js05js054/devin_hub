@@ -1,0 +1,19 @@
+/* Active only while an image is set: the image sits behind the page and the large panel grounds turn translucent. */
+body[data-dsh-bg-image]::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--dsh-bg-image) center / cover no-repeat;
+}
+
+body[data-dsh-bg-image][data-dsh-bg-image] {
+  --dsw-alias-bg-base: color-mix(in srgb, var(--dsw-static-neutral-bluish-00) var(--dsh-bg-panel, 70%), transparent);
+  --dsw-specific-sidebar-fill: color-mix(in srgb, var(--dsw-static-neutral-bluish-50) var(--dsh-bg-panel, 70%), transparent);
+}
+
+body[data-dsh-bg-image][data-ds-dark-theme] {
+  --dsw-alias-bg-base: color-mix(in srgb, var(--dsw-static-neutral-bluish-950) var(--dsh-bg-panel, 70%), transparent);
+  --dsw-specific-sidebar-fill: color-mix(in srgb, var(--dsw-static-neutral-bluish-900) var(--dsh-bg-panel, 70%), transparent);
+}

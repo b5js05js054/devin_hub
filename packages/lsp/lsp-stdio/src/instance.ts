@@ -21,6 +21,8 @@ import type { HostSource } from './host.ts'
 import type { WireInitializeResult, WireServerCapabilities } from './protocol.ts'
 import {
   negotiatePositionEncoding,
+  normalizeDiagnostics,
+  normalizeDocumentSymbols,
   normalizeHover,
   normalizeLocations,
   requestMethod,
@@ -190,13 +192,15 @@ export class LspInstance {
     position: LspProviderQuery['position'],
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const params = {
-      textDocument: { uri },
-      position: { line: position.line, character: position.character },
-      // findReferences always includes declarations: the caller gets no flag and impact analysis
-      // never omits the defining site.
-      ...(operation === 'findReferences' ? { context: { includeDeclaration: true } } : {}),
-    }
+    const params = operation === 'documentSymbol' || operation === 'diagnostics'
+      ? { textDocument: { uri } }
+      : {
+        textDocument: { uri },
+        position: { line: position.line, character: position.character },
+        // findReferences always includes declarations: the caller gets no flag and impact analysis
+        // never omits the defining site.
+        ...(operation === 'findReferences' ? { context: { includeDeclaration: true } } : {}),
+      }
     const requestId = this.connection.peekNextId()
     const send = this.connection.request(requestMethod(operation), params)
     if (signal === undefined) return send
@@ -239,6 +243,8 @@ export class LspInstance {
     if (operation === 'hover') {
       return { kind: 'hover', hover: normalizeHover(payload) }
     }
+    if (operation === 'documentSymbol') return { kind: 'symbols', symbols: normalizeDocumentSymbols(payload) }
+    if (operation === 'diagnostics') return { kind: 'diagnostics', diagnostics: normalizeDiagnostics(payload) }
     // The filesystem provider owns URI syntax for the execution platform, which may differ from the
     // harness host. Preserve that coordinate through rendering instead of reparsing `spec.cwd` there.
     return { kind: 'locations', locations: normalizeLocations(payload), resolvedWorkspaceUri: this.spec.workspaceUri }
@@ -346,5 +352,7 @@ const CLIENT_CAPABILITIES = {
     definition: { linkSupport: true },
     implementation: { linkSupport: true },
     references: {},
+    documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+    diagnostic: { dynamicRegistration: false },
   },
 } as const

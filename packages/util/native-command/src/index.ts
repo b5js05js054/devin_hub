@@ -9,6 +9,7 @@ export {
   canOpenNativePath,
   nativeFileManager,
   revealNativePath,
+  trashNativePath,
   openNativePath,
   openNativeAssociatedPath,
   openNativeTextFile,

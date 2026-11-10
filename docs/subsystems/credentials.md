@@ -367,6 +367,195 @@ abstract getDeviceIdentity(): Promise<{ deviceId?: string; userId?: AccountUserI
 
 Source: [`packages/credentials/deepseek-account/src/index.ts`](../../packages/credentials/deepseek-account/src/index.ts)
 
+<a id="ctxmediacontroller--mediacontroller"></a>
+
+### `ctx.mediaController` — `MediaController`
+
+Media model parameter spec lookup and the values chosen per session and model.
+
+```ts cordis-catalog
+/**
+ * Ask the relay which parameters a model accepts.
+ * @param model - model id as listed by the relay.
+ * @returns the spec, or why there is none (`not-media` for chat models).
+ */
+@Remote async getSpec(model: string): Promise<MediaSpecResult>
+
+/**
+ * Remember the parameters the next generation of this model in this session should use.
+ * @param sessionId - session whose requests carry the parameters.
+ * @param model - media model the values belong to.
+ * @param params - chosen values; an empty object clears the choice.
+ */
+@Remote setParams(sessionId: string, model: string, params: MediaParams): void
+
+/**
+ * Look up the media parameters chosen for one session and model.
+ * @param sessionId - session issuing the request.
+ * @param model - model being called.
+ * @returns the chosen values, or `undefined` when none were set.
+ */
+paramsOf(sessionId: string, model: string): MediaParams | undefined
+```
+
+Source: [`packages/api/media-controller/src/index.ts`](../../packages/api/media-controller/src/index.ts)
+
+<a id="ctxrelayaccount--relayaccount"></a>
+
+### `ctx.relayAccount` — `RelayAccount`
+
+Account service of the relay backend. `getToken` is Host-only: no view returned by this service carries the session token.
+
+```ts cordis-catalog
+/**
+ * Read the stored sign-in session.
+ * @returns session snapshot without the token.
+ */
+async getState(): Promise<RelayAccountView>
+
+/**
+ * Host-only session token for relay and license requests.
+ * @returns the bearer token, or undefined while signed out or expired.
+ */
+async getToken(): Promise<string | undefined>
+
+/**
+ * Read the configured relay backend origin.
+ * @returns the configured backend origin; '' while unconfigured. Host-only.
+ */
+getOrigin(): string
+
+/**
+ * Read the release the operator published for this platform.
+ * @returns the release, or null when none is enabled or none exists for this platform.
+ * @throws RelayAccountError `signed-out` without a session; `network`, `rejected`, or `invalid-response` from the backend.
+ */
+async checkUpdate(): Promise<RelayUpdateInfo | null>
+
+/**
+ * Sign in with email and password.
+ * @param email - account email.
+ * @param password - account password.
+ * @returns the new snapshot.
+ * @throws RelayAccountError on network, rejection, or malformed response.
+ */
+async login(email: string, password: string): Promise<RelayAccountView>
+
+/**
+ * Register and sign in; upload progress is observable through `getState().upload`.
+ * @param email - account email.
+ * @param password - account password.
+ * @param avatar - optional avatar image, png/jpg/gif/webp up to 5 MB.
+ * @returns the new snapshot.
+ * @throws RelayAccountError `invalid-image` for an unsupported or oversized avatar, otherwise as {@link login}.
+ */
+async register(email: string, password: string, avatar?: RelayImageInput): Promise<RelayAccountView>
+
+/**
+ * Begin browser authorization (OAuth code + PKCE) against the website; returns immediately.
+ * Progress and the page to open are observable through `getState().signIn`; success stores the session.
+ * @returns the snapshot, with `signIn.authorizeUrl` set; an already-running attempt is joined.
+ * @throws RelayAccountError `not-configured` without a backend origin.
+ */
+async startSignIn(): Promise<RelayAccountView>
+
+/** Abandon a running browser sign-in; idle is a no-op. */
+cancelSignIn(): void
+
+/**
+ * Re-validate the stored session against the backend; an unauthorized answer signs out locally.
+ * @returns the refreshed snapshot.
+ * @throws RelayAccountError `signed-out` without a session; `network` keeps the session.
+ */
+async refresh(): Promise<RelayAccountView>
+
+/** Remove the local session and the local background of that user. */
+async logout(): Promise<void>
+
+/**
+ * Store a custom background for the signed-in user.
+ * @param bytes - image content, png/jpg/gif/webp up to 5 MB.
+ * @throws RelayAccountError `signed-out` or `invalid-image`.
+ */
+async setBackground(bytes: Uint8Array): Promise<void>
+
+/** Remove the signed-in user's custom background; absent is a no-op. */
+async clearBackground(): Promise<void>
+
+/**
+ * Read the signed-in user's stored background image.
+ * @returns the background image, or undefined when none is stored.
+ */
+async readBackground(): Promise<RelayBackground | undefined>
+```
+
+Source: [`packages/credentials/relay-account/src/index.ts`](../../packages/credentials/relay-account/src/index.ts)
+
+<a id="ctxrelaylicense--relaylicense"></a>
+
+### `ctx.relayLicense` — `RelayLicense`
+
+Card-key license service; lifecycle follows the signed-in relay account.
+
+```ts cordis-catalog
+/**
+ * Read the stored card-key license.
+ * @returns license snapshot without the token or the full card key.
+ */
+async getState(): Promise<RelayLicenseView>
+
+/**
+ * Activate a card key for this device; requires a signed-in relay account.
+ * @param cardKey - card key, case-insensitive.
+ * @returns outcome with the backend message.
+ */
+async activate(cardKey: string): Promise<RelayLicenseOutcome>
+
+/**
+ * Re-adopt a card key the signed-in account already bound to this device, so signing in again needs no card entry.
+ * @returns whether a license was restored; any refusal or network failure leaves the state unchanged.
+ */
+async restore(): Promise<boolean>
+
+/**
+ * Renew the license token. Network failures and a signed-out account keep the old token; only an explicit backend refusal deactivates.
+ * @returns whether the license is valid afterwards.
+ */
+async refresh(): Promise<boolean>
+
+/**
+ * Material for one relay request: a fresh token plus card key and device id.
+ * An expired token renews synchronously; a token within five minutes of expiry renews in the background.
+ * @returns credentials, or undefined while not activated.
+ */
+async getCredentials(): Promise<LicenseCredentials | undefined>
+
+/** Fetch the latest balance; failures are silent and keep the previous figure. */
+async refreshBalance(): Promise<void>
+
+/**
+ * Redeem a top-up code onto the activated card.
+ * @param code - top-up code, case-insensitive.
+ * @returns outcome with the backend message.
+ */
+async redeem(code: string): Promise<RelayLicenseOutcome>
+
+/**
+ * Query usage totals, per-day model spend and call details; the backend JSON is returned unchanged.
+ * @param days - window in days, clamped to 1..90 (default 30).
+ * @param page - 1-based page, minimum 1.
+ * @param pageSize - rows per page, clamped to 1..100 (default 20).
+ * @returns backend JSON.
+ * @throws RelayAccountError `rejected` when not activated, when the backend refuses, or when an old backend has no usage route.
+ */
+async usage(days: number = 30, page: number = 1, pageSize: number = 20): Promise<unknown>
+
+/** Clear the local license, keeping the device id. */
+async deactivate(): Promise<void>
+```
+
+Source: [`packages/credentials/relay-license/src/index.ts`](../../packages/credentials/relay-license/src/index.ts)
+
 <a id="authorization-events"></a>
 
 ### `authorization/*` events
@@ -486,6 +675,44 @@ Local grant removal has completed.
 ```
 
 Source: [`packages/credentials/deepseek-account/src/index.ts`](../../packages/credentials/deepseek-account/src/index.ts)
+
+<a id="relay-account-events"></a>
+
+### `relay-account/*` events
+
+<a id="relay-accountchanged--emit"></a>
+
+#### `relay-account/changed` — emit
+
+Session, profile, or background changed.
+
+```ts cordis-catalog
+/** Session, profile, or background changed.
+ * @mode emit
+ */
+'relay-account/changed'(): void
+```
+
+Source: [`packages/credentials/relay-account/src/index.ts`](../../packages/credentials/relay-account/src/index.ts)
+
+<a id="relay-license-events"></a>
+
+### `relay-license/*` events
+
+<a id="relay-licensechanged--emit"></a>
+
+#### `relay-license/changed` — emit
+
+License state or balance changed.
+
+```ts cordis-catalog
+/** License state or balance changed.
+ * @mode emit
+ */
+'relay-license/changed'(): void
+```
+
+Source: [`packages/credentials/relay-license/src/index.ts`](../../packages/credentials/relay-license/src/index.ts)
 <!-- END GENERATED cordis-surface -->
 
 The account Service Definition exposes getState, getProfile, getBalance, getUnnotifiedBonuses, ackBonusNotified, startSignIn, cancelSignIn, signOut, watch, and Host-only resolveToken and getPlatformSession. The platform provider implements it with an AuthorizationFlow and a private GrantRecord. AccountView distinguishes stored presence from server validation; attempt IDs bind cancellation to one local flow. See [the account package](../../packages/credentials/deepseek-account/README.md).

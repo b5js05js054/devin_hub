@@ -40,8 +40,9 @@ import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { pruneCrashReports, RendererConsoleTail, writeCrashReport, type CrashReportSource } from './crash-report.ts'
 import { openWelcomeWindow } from './welcome-window.ts'
-import { WELCOME_IPC, needsWelcome, type WelcomeNotice } from './welcome-api.ts'
+import { WELCOME_IPC, needsWelcome } from './welcome-api.ts'
 import { connectDesktopWelcome, type DesktopWelcomeBackend } from './welcome-backend.ts'
+import { downloadRelayUpdate, isNewerRelease } from './relay-update.ts'
 import { DesktopUpdateJournal } from './update-journal.ts'
 import { DesktopUpdatePreparationError } from './update-error.ts'
 import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './update-schedule.ts'
@@ -189,20 +190,6 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
  */
 function chromeFallbackFill(): string {
   return nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb'
-}
-
-/**
- * Add the effective Desktop palette to a Platform authorization URL so the
- * login page opens in the application's theme. `system` resolves through
- * `nativeTheme.shouldUseDarkColors`, which follows the theme source the
- * application preload publishes.
- * @param authorizeUrl - validated Platform authorization URL.
- * @returns the authorization URL carrying `theme=light` or `theme=dark`.
- */
-function platformLoginUrl(authorizeUrl: string): string {
-  const url = new URL(authorizeUrl)
-  url.searchParams.set('theme', nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
-  return url.href
 }
 
 function createWindow(preload: string, show = false, primary = false): BrowserWindow {
@@ -414,10 +401,8 @@ async function main(): Promise<void> {
     } catch (_error) { /* Analytics cannot interrupt native actions. */ }
   }
   let stopAccount: (() => void) | undefined
-  let openedAttempt: string | undefined
-  let returnedAttempt: string | undefined
-  let pendingWelcomeNotice: WelcomeNotice | undefined
-  let previousAccountStatus: string | undefined
+  let openedAuthorizeUrl: string | undefined
+  let previousRelayReady: boolean | undefined
   const assertProductSender = (event: IpcMainInvokeEvent): void => {
     assertDesktopSender(event, ['app'])
     if (mainWindow === undefined || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents
@@ -455,47 +440,35 @@ async function main(): Promise<void> {
         hostUrl = ready.url
         if (ready.injections === undefined) throw new Error('Desktop Host did not provide boot injections')
         injections = ready.injections
-        welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
+        welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init))
         analyticsEnabled = await welcomeBackend.analyticsEnabled().catch(() => false)
         if (!reportedLaunch) { reportedLaunch = true; void track('desktop_app_launch', {}) }
         stopAccount?.()
-        const accountBackend = welcomeBackend.account
-        stopAccount = accountBackend.watch((state) => {
-          if (quitting) return
-          if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) welcomeWindow.webContents.send(WELCOME_IPC.state, state)
-          const attempt = state.attempt
-          if (attempt?.phase === 'waiting-browser' && attempt.authorizeUrl !== undefined && openedAttempt !== attempt.id) {
-            openedAttempt = attempt.id
-            void shell.openExternal(platformLoginUrl(attempt.authorizeUrl)).catch(() => undefined)
-          }
-          if ((attempt?.phase === 'failed' || attempt?.phase === 'expired') && returnedAttempt !== attempt.id) {
-            returnedAttempt = attempt.id
-            focusPrimaryWindow()
-          }
-          if (state.status === 'credential-stored' && attempt?.phase === 'succeeded' && welcomeWindow !== undefined) void enterWorkspace({ activate: false }).catch(() => undefined)
-          if (previousAccountStatus === 'credential-stored' && state.status === 'signed-out') {
-            void readWelcomeState().then(async (value) => {
-              if (needsWelcome(value) && !quitting) {
-                enteredWorkspace = false
-                await showWelcome()
-                if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) welcomeWindow.webContents.send(WELCOME_IPC.state, state)
-              }
-              return undefined
-            }).catch(() => undefined)
-          }
-          previousAccountStatus = state.status
-        }, () => {
-          // The stream reconnects; a transport failure does not change account state.
-        }, () => {
-          void readWelcomeState().then(async (value) => {
-            if (!needsWelcome(value) || quitting) return
-            pendingWelcomeNotice = 'session-expired'
-            enteredWorkspace = false
-            await showWelcome()
-            const state = await accountBackend.state()
+        const relay = welcomeBackend.relay
+        let polling = true
+        let busy = false
+        const poll = async (): Promise<void> => {
+          if (busy || quitting) return
+          busy = true
+          try {
+            const state = await relay.state()
             if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) welcomeWindow.webContents.send(WELCOME_IPC.state, state)
-          }).catch(() => undefined)
-        }, (enabled) => { analyticsEnabled = enabled })
+            if (state.signIn.phase === 'waiting-browser' && state.signIn.authorizeUrl !== undefined && openedAuthorizeUrl !== state.signIn.authorizeUrl) {
+              openedAuthorizeUrl = state.signIn.authorizeUrl
+              void shell.openExternal(state.signIn.authorizeUrl).catch(() => undefined)
+            }
+            if (state.signIn.phase === 'idle') openedAuthorizeUrl = undefined
+            const ready = state.signedIn
+            if (ready && welcomeWindow !== undefined) void enterWorkspace({ activate: false }).catch(() => undefined)
+            if (!ready && previousRelayReady === true && enteredWorkspace && !quitting) {
+              enteredWorkspace = false
+              await showWelcome()
+            }
+            previousRelayReady = ready
+          } catch { /* The next tick retries; a transient Host error leaves the current page. */ } finally { busy = false }
+        }
+        const timer = setInterval(() => { if (polling) void poll() }, 1500)
+        stopAccount = () => { polling = false; clearInterval(timer) }
       },
       stop: async () => {
         analyticsEnabled = false
@@ -644,6 +617,36 @@ async function main(): Promise<void> {
 
   const updateSchedule = new DesktopUpdateSchedule(updates, resolveDesktopUpdateScheduleConfig(process.env))
 
+  let relayUpdateOperation: Promise<void> | undefined
+  let declinedRelayVersion: string | undefined
+  const checkRelayUpdate = (): Promise<void> => relayUpdateOperation ??= (async () => {
+    const backendUpdate = welcomeBackend === undefined || quitting ? null : await welcomeBackend.checkUpdate().catch(() => null)
+    if (backendUpdate === null || !isNewerRelease(backendUpdate.version, app.getVersion())) return
+    if (!backendUpdate.mandatory && declinedRelayVersion === backendUpdate.version) return
+    const zh = locale.id === 'zh-CN'
+    const title = zh ? '发现新版本' : 'Update available'
+    const answer = await ordinaryMessageBox({
+      type: 'info', title, cancelId: backendUpdate.mandatory ? 0 : 1,
+      message: zh ? `新版本 ${backendUpdate.version} 已发布${backendUpdate.mandatory ? '，必须更新后才能继续使用' : ''}` : `Version ${backendUpdate.version} is available${backendUpdate.mandatory ? ' and required' : ''}`,
+      detail: backendUpdate.note,
+      buttons: backendUpdate.mandatory ? [zh ? '下载并安装' : 'Download and install'] : [zh ? '下载并安装' : 'Download and install', locale.messages.later],
+    })
+    if (answer.response !== 0) { declinedRelayVersion = backendUpdate.version; return }
+    try {
+      const file = await downloadRelayUpdate(backendUpdate, (input, init) => net.fetch(input, init), () => undefined)
+      const failure = await shell.openPath(file)
+      if (failure !== '') throw new Error(failure)
+      app.quit()
+    } catch (error) {
+      await ordinaryMessageBox({ type: 'error', title, cancelId: 0, buttons: [locale.messages.later],
+        message: zh ? '更新下载或校验失败' : 'Update download or verification failed',
+        detail: error instanceof Error ? error.message : String(error) })
+    }
+  })().catch((error: unknown) => { console.error(error) }).finally(() => { relayUpdateOperation = undefined })
+  const relayUpdateTimer = setInterval(() => { void checkRelayUpdate() }, 3_600_000)
+  relayUpdateTimer.unref()
+  setTimeout(() => { void checkRelayUpdate() }, 15_000).unref()
+
   const downloadUpdate = async (version: string): Promise<DesktopUpdateState> => {
     void track('desktop_upgrade_click', {})
     updateJournal?.action('download-requested')
@@ -779,7 +782,7 @@ async function main(): Promise<void> {
   })
   ipcMain.handle(DESKTOP_IPC.onboardingApiKey, async (event) => {
     assertProductSender(event)
-    return (await readWelcomeState()).hasApiKey
+    return true
   })
   ipcMain.on(DESKTOP_IPC.onboardingActive, (event, active: unknown) => {
     const window = mainWindow
@@ -921,9 +924,11 @@ async function main(): Promise<void> {
   const automaticCheck = (): void => {
     if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
     if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
+    if (!quitting) void checkRelayUpdate()
   }
   powerMonitor.on('resume', automaticCheck)
   app.on('will-quit', () => {
+    clearInterval(relayUpdateTimer)
     updateSchedule.dispose()
     powerMonitor.off('resume', automaticCheck)
     updates.dispose()
@@ -932,7 +937,7 @@ async function main(): Promise<void> {
   const applicationIconPath = development ? join(app.getAppPath(), 'resources', 'icon-windows.png')
     : join(process.resourcesPath, 'icon.png')
   app.setAboutPanelOptions({
-    applicationName: 'DeepSeek Harness',
+    applicationName: 'BaiLan',
     applicationVersion: app.getVersion(),
     // The release has no separate build number; omit Electron's bundle version.
     version: '',
@@ -1152,41 +1157,37 @@ async function main(): Promise<void> {
       welcomeWindow = await openWelcomeWindow(locale, {
         analytics: track,
         analyticsEnabled: () => Promise.resolve(analyticsEnabled),
-        takeNotice: () => {
-          const notice = pendingWelcomeNotice
-          pendingWelcomeNotice = undefined
-          return Promise.resolve(notice)
-        },
         startSignIn: async () => {
           if (welcomeBackend === undefined) throw new Error('desktop welcome: backend unavailable')
-          return welcomeBackend.account.start(desktopClientMetadata(locale.id))
+          return welcomeBackend.relay.start()
         },
-        cancelSignIn: async (id) => {
+        cancelSignIn: async () => {
           if (welcomeBackend === undefined) throw new Error('desktop welcome: backend unavailable')
-          return welcomeBackend.account.cancel(id)
+          return welcomeBackend.relay.cancel()
         },
-        copySignInLink: async (id) => {
-          const state = await welcomeBackend?.account.state()
-          if (state?.attempt?.id !== id || state.attempt.phase !== 'waiting-browser' || state.attempt.authorizeUrl === undefined) {
-            throw new Error('desktop welcome: login link is unavailable')
-          }
-          await clipboard.writeText(platformLoginUrl(state.attempt.authorizeUrl))
+        copySignInLink: async () => {
+          const state = await welcomeBackend?.relay.state()
+          if (state?.signIn.phase !== 'waiting-browser' || state.signIn.authorizeUrl === undefined) throw new Error('desktop welcome: login link is unavailable')
+          await clipboard.writeText(state.signIn.authorizeUrl)
         },
-        saveApiKey: async (apiKey) => {
-          if (backend.host === undefined || welcomeBackend === undefined) return { ok: false }
-          const saved = await welcomeBackend.save(apiKey)
-          if (!saved.ok) return saved
-          await enterWorkspace()
-          return { ok: true }
+        readRelay: async () => {
+          if (welcomeBackend === undefined) throw new Error('desktop welcome: backend unavailable')
+          return welcomeBackend.relay.state()
         },
-        skip: enterWorkspace,
+        activate: async (cardKey) => {
+          if (welcomeBackend === undefined) throw new Error('desktop welcome: backend unavailable')
+          const outcome = await welcomeBackend.relay.activate(cardKey)
+          if (outcome.ok) await enterWorkspace()
+          return outcome
+        },
+        signOut: async () => {
+          if (welcomeBackend === undefined) throw new Error('desktop welcome: backend unavailable')
+          return welcomeBackend.relay.signOut()
+        },
       })
       const window = welcomeWindow
       window.once('closed', () => {
-        void welcomeBackend?.account.state().then((state) => {
-          if (state.attempt !== null && !enteredWorkspace) return welcomeBackend?.account.cancel(state.attempt.id)
-          return undefined
-        }).catch(() => undefined)
+        if (!enteredWorkspace) void welcomeBackend?.relay.cancel().catch(() => undefined)
       })
       window.once('closed', () => {
         if (welcomeWindow === window) welcomeWindow = undefined
@@ -1208,7 +1209,7 @@ async function main(): Promise<void> {
     locale = resolveDesktopStartupLocale(state.localePreference, systemLanguages)
     windowsLanguage = locale.id
     refreshApplicationMenu()
-    if (!enteredWorkspace && needsWelcome({ loggedIn: state.loggedIn, hasApiKey: state.hasApiKey })) {
+    if (!enteredWorkspace && needsWelcome({ relayReady: state.relayReady })) {
       // A later login must retain its own activation policy instead of replaying startup focus.
       raiseAfterUpdate = false
       await showWelcome()

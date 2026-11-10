@@ -4,9 +4,10 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, IconPlusOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TerminalViewState, TerminalView } from '@deepseek-ai/dsh-api-terminal-controller/client'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { FactoryComponentPropsOf, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { TerminalBodyInjected } from './face.ts'
+import type {} from './face.ts'
 import type {} from './locales.ts'
 import '@xterm/xterm/css/xterm.css'
 import css from './terminal.module.css'
@@ -70,7 +71,7 @@ export function TerminalBody({ useTabInfo, useTerminal, useTheme, view, t }: Ter
 }
 
 /* oxlint-disable typescript/no-non-null-assertion -- React sets the DOM ref, then these effects initialize and use the emulator. */
-function TerminalScreen({ state, model, visible, label, theme }: {
+export function TerminalScreen({ state, model, visible, label, theme }: {
   state: TerminalViewState
   model: TerminalView
   visible: boolean
@@ -181,4 +182,38 @@ function fitScreen(xterm: Terminal, fit: FitAddon, state: TerminalViewState, mod
   if (cols < 2 || rows < 1) return
   xterm.resize(cols, rows)
   model.resize(cols, rows)
+}
+
+/**
+ * Render one retained terminal for a surface that is not a sidebar tab, such as the IDE bottom panel.
+ * @param props - terminal model, observable state and translated copy.
+ * @returns the terminal screen with its connection status.
+ */
+export function EmbeddedTerminal({ terminalKey, active, closing, onClosed, view, hold, close, useTerminal, useTheme, t }: FactoryComponentPropsOf<'terminal.embedded'>): ReactNode {
+  const theme = useTheme(value => value)
+  const state = useTerminal(terminalKey)
+  const model = view(terminalKey)
+  useEffect(() => hold(terminalKey), [hold, terminalKey])
+  useEffect(() => model.mount(), [model])
+  useEffect(() => { if (closing) { close(terminalKey); onClosed() } }, [closing, close, terminalKey, onClosed])
+  if (state === undefined) return null
+  if (state.info === undefined) {
+    const failed = state.phase === 'failed'
+    const message = failed ? (state.issue === undefined ? state.error : t(state.issue)) : undefined
+    return (
+      <section className={css.root} data-sidebar-terminal hidden={!active}>
+        <div className={css.status} role="status">
+          {failed ? message ?? t('unavailable') : state.phase === 'creating' ? t('creating') : t('loading')}
+          {failed && <Button variant="outline" size="sm" onClick={() => { void model.refresh() }}>{t('retry')}</Button>}
+          {failed && <Button variant="ghost" size="sm" onClick={() => { close(terminalKey); onClosed() }}>{t('closeTerminal')}</Button>}
+        </div>
+      </section>
+    )
+  }
+  return (
+    <section className={css.root} data-sidebar-terminal hidden={!active}>
+      {state.phase !== 'connected' && <div className={css.status} role="status">{t(state.phase === 'disconnected' ? 'disconnected' : 'connecting')}</div>}
+      <TerminalScreen state={state} model={model} visible={active} label={t('title')} theme={theme} />
+    </section>
+  )
 }

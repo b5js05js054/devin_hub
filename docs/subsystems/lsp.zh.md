@@ -8,15 +8,15 @@ LSP seam 是一个[能力 seam](../glossary.zh.md#capability-seam)：它在单�
 
 ## 操作与坐标
 
-seam 与模型恰好公开 4 项语义查询；该联合是闭合的，因此新增一项查询会通过编译强制要求同步修改 seam、提供方和工具。位置与范围采用从零开始的 UTF-16 坐标，与协议一致；面向模型的工具采用从 1 开始的光标约定，并在输入和输出时进行转换。
+seam 与模型恰好公开 6 项语义查询；该联合是闭合的，因此新增一项查询会通过编译强制要求同步修改 seam、提供方和工具。`documentSymbol` 与 `diagnostics` 描述整个文档，其请求携带的位置会被提供方忽略。位置与范围采用从零开始的 UTF-16 坐标，与协议一致；面向模型的工具采用从 1 开始的光标约定，并在输入和输出时进行转换。
 
 ```ts type-equiv
 /**
- * The four semantic queries the seam and model expose. A closed union: adding an operation is a
- * compile-enforced change across the seam, providers, and the tool. Symbols and call hierarchy are
- * not operations here; they need different schemas.
+ * The six semantic queries the seam and model expose. A closed union: adding an operation is a
+ * compile-enforced change across the seam, providers, and the tool. `documentSymbol` and
+ * `diagnostics` take no cursor position; call hierarchy is not an operation here.
  */
-type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover'
+type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover' | 'documentSymbol' | 'diagnostics'
 ```
 
 ```ts type-equiv
@@ -73,7 +73,7 @@ interface LspProviderQuery extends LspQueryRequest {
 
 ## 结果
 
-这是一个闭合的可辨识联合：导航操作规范化为 `locations`，`hover` 规范化为内容或 `null`。消费方使用 `switch` 对 `kind` 做穷尽处理，因此新增分支会使编译失败，直到完成处理。`findReferences` 始终包含声明；提供方在内部强制保证这一点，因此调用方没有对应 flag。`locations` 变体携带 `resolvedWorkspaceUri`，即提供方的规范工作区 `file:` URI。调用方相对化位置 URI 时应使用这一坐标，而不是对可能经过符号链接的请求根目录应用宿主平台路径规则。
+这是一个闭合的可辨识联合：导航操作规范化为 `locations`，`hover` 规范化为内容或 `null`，`documentSymbol` 规范化为 `symbols`，`diagnostics` 规范化为 `diagnostics`。消费方使用 `switch` 对 `kind` 做穷尽处理，因此新增分支会使编译失败，直到完成处理。`findReferences` 始终包含声明；提供方在内部强制保证这一点，因此调用方没有对应 flag。`locations` 变体携带 `resolvedWorkspaceUri`，即提供方的规范工作区 `file:` URI。调用方相对化位置 URI 时应使用这一坐标，而不是对可能经过符号链接的请求根目录应用宿主平台路径规则。
 
 ```ts type-equiv
 /** One resolved location: a document URI and the range within it. */
@@ -96,6 +96,40 @@ interface LspHover {
 ```
 
 ```ts type-equiv
+/** One symbol of a document outline; `depth` is the nesting level (0 = top level). */
+interface LspSymbol {
+  /** The symbol name. */
+  readonly name: string
+  /** The LSP `SymbolKind` name (e.g. `Class`, `Method`), or `Unknown`. */
+  readonly kind: string
+  /** The symbol's full range. */
+  readonly range: LspRange
+  /** Nesting level in the outline. */
+  readonly depth: number
+  /** Extra detail such as a signature, when the server supplied one. */
+  readonly detail?: string
+}
+```
+
+```ts type-equiv
+/** Severity of an {@link LspDiagnostic}. */
+type LspSeverity = 'error' | 'warning' | 'information' | 'hint'
+```
+
+```ts type-equiv
+/** One server-reported problem in a document. */
+interface LspDiagnostic {
+  readonly range: LspRange
+  readonly severity: LspSeverity
+  readonly message: string
+  /** The reporting tool (e.g. `ts`), when supplied. */
+  readonly source?: string
+  /** The diagnostic code, stringified, when supplied. */
+  readonly code?: string
+}
+```
+
+```ts type-equiv
 /**
  * The closed result union. Navigation operations (`goToDefinition`, `findReferences`,
  * `goToImplementation`) normalize to `locations`; `hover` normalizes to content or `null`.
@@ -109,6 +143,8 @@ interface LspHover {
 type LspQueryResult =
   | { readonly kind: 'locations'; readonly locations: readonly LspLocation[]; readonly resolvedWorkspaceUri: string }
   | { readonly kind: 'hover'; readonly hover: LspHover | null }
+  | { readonly kind: 'symbols'; readonly symbols: readonly LspSymbol[] }
+  | { readonly kind: 'diagnostics'; readonly diagnostics: readonly LspDiagnostic[] }
 ```
 
 ## 提供方与服务
@@ -140,7 +176,7 @@ interface LspProvider {
 ```ts type-equiv
 /**
  * The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query
- * execution; exposes exactly the four operations and no protocol escape hatch.
+ * execution; exposes exactly the six operations and no protocol escape hatch.
  */
 interface LspService {
   /**
@@ -176,7 +212,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.lsp` — `LspService`
 
-The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the four operations and no protocol escape hatch.
+The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the six operations and no protocol escape hatch.
 
 ```ts cordis-catalog
 /**

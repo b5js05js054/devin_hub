@@ -431,6 +431,8 @@ button.crumb:hover {
 .embeddedBody[data-content-phase='active'] .composerSeat {
   position: sticky;
   bottom: 0;
+  /* A blank Session renders no view, so nothing else fills the column. */
+  margin-top: auto;
   /* Above markdown CodeBlock sticky banners (z-index 6) so the footer never
      paints under a sticking code header while scrolling. The pinned compaction
      header (MessageItem.module.css, ui-chat) and the turn-navigation rail slot

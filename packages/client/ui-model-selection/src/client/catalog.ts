@@ -92,10 +92,23 @@ export class ModelCatalogDirectory {
     this.store.set({ value, status: 'idle', error: null })
   }
 
-  /** Invalidate and reload the catalog after a Host-side model input changes. */
+  /** Reload after a Host-side model input changes; the shown list stays until the new one replaces it, with no loading state. */
   refresh(): void {
-    this.invalidate()
-    void this.load().catch(() => { /* the selector exposes the shared error */ })
+    const state = this.store.getSnapshot()
+    if (state.value === null || state.status !== 'ready') {
+      this.invalidate()
+      void this.load().catch(() => { /* the selector exposes the shared error */ })
+      return
+    }
+    const generation = this.generation
+    void this.ctx.remote.session.modelCatalog().then((response) => {
+      if (!response.ok || generation !== this.generation) return
+      if (JSON.stringify(response.value) === JSON.stringify(this.store.getSnapshot().value)) return
+      for (const group of response.value.groups) {
+        for (const model of group.models) this.reasoning.set(JSON.stringify([group.id, model.id]), model.reasoning)
+      }
+      this.store.set({ value: response.value, status: 'ready', error: null })
+    }).catch(() => { /* keep the list already shown */ })
   }
 
   /** Clear Host-specific values and load the replacement Host generation. */

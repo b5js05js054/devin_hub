@@ -12,7 +12,8 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import * as yaml from 'js-yaml'
 import {
@@ -88,7 +89,8 @@ export function selectDesktopPackageClosure(
 }
 
 function packedManifest(tarball: string): Record<string, unknown> {
-  const value: unknown = JSON.parse(capture('tar', ['-xOzf', tarball, 'package/package.json']))
+  // GNU tar reads the colon in a Windows drive path as a remote-host separator, so tar runs beside the tarball.
+  const value: unknown = JSON.parse(capture('tar', ['-xOzf', basename(tarball), 'package/package.json'], { cwd: dirname(tarball) }))
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`desktop package set: ${tarball} has no package manifest`)
   }
@@ -175,4 +177,13 @@ function main(): void {
   console.log(`desktop package set: prepared ${output}`)
 }
 
-if (import.meta.main) main()
+/**
+ * Detect a direct script launch where `import.meta.main` is unavailable (Node 22, tsx).
+ * @returns Whether the process entry module is this file.
+ */
+function isStartedAsScript(): boolean {
+  const entry = process.argv[1]
+  return entry !== undefined && pathToFileURL(resolve(entry)).href === import.meta.url
+}
+
+if (import.meta.main || isStartedAsScript()) main()

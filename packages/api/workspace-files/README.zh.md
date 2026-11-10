@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可从 Web Client 预览 Session 文件系统允许读取的文件。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。可以跟随一个文件或一个目录直接子项的变化。文件读取和监听可以指向工作区外路径；目录列举和监听仍限定于工作区。本服务不提供修改操作。
+使用本包可从 Web Client 预览 Session 文件系统允许读取的文件。它按页读取 UTF-8 文本、按有界窗口或完整文件读取原始字节、从基文件目录解析关联文件，并报告文件元数据。可以跟随一个文件或一个目录直接子项的变化。文件读取和监听可以指向工作区外路径；目录列举和监听仍限定于工作区。它也可以整体替换工作区内一个已有文件的文本，并在文件自读取后发生变化时拒绝写入。
 
 ## 目录
 
@@ -33,6 +33,8 @@ kind: "package-reference"
 | `read(path, { offset?, limit? })` | `WorkspaceFileText` = stat + `{ offset, text, lines, eof }` | UTF-8 文本文件的一个行窗口；`lines` 计行数，使单个空行与越过文件末尾的页可区分 |
 | `readBytes(path, { range?, baseFile? })` | `WorkspaceFileBytes` = stat + `{ offset, data, eof }` | 以 `Uint8Array` 返回完整文件或有界字节范围；可从另一个文件所在目录解析目标 |
 | `list(path)` | `WorkspaceDirectoryListing { path, entries, truncated }` | 一个目录的直接子项 |
+| `search({ kind, query, limit?, ignoreCase? })` | `WorkspaceSearchResult { matches, truncated }` | 按文件名或文本对工作区树做有界搜索；`truncated` 表示结果可能不完整 |
+| `write(path, content, expectedVersion)` | `WorkspaceFileStat` | 整体替换工作区内一个已有常规文件的 UTF-8 文本；当前版本不同则以 `workspace-file/stale-version` 失败且不写入 |
 | `changes(path)` | `WorkspaceFileWatchFrame` 流 | 订阅就绪确认，随后为单个文件或目录直接子项的失效通知 |
 
 ### 寻址与路径
@@ -49,6 +51,10 @@ kind: "package-reference"
 
 必填的选项对象传 `{}` 时，在 `maxFileBytes` 上限内读取完整文件；传 `{ range: {} }` 时，在 `maxBytes` 上限内读取默认字节窗口。超大完整文件失败，不截断。`baseFile` 与 `range` 可以组合，窗口始终不受完整文件上限约束。二进制 Remote 使用 Connection 的 multipart 响应传递 JSON 元数据与原始字节；生成的 Client 直接返回 `Uint8Array<ArrayBuffer>`，无需 base64 解码。调用方取消会传到文件系统。端点返回数据，不提供可导航的文档。
 
+### 写入检查
+
+`write` 只接受解析后位于 Session 工作区根内、且指向已有常规文件的路径，从不创建文件、目录或链接目标。含 NUL 字节的内容以 `workspace-file/not-text` 失败，超过完整文件上限的内容以 `workspace-file/too-large` 失败。写入经由组合文件系统，带 `replaceIfVersion` 守卫并使用该 Session 解析出的沙箱策略，因此沙箱仍可拒绝。
+
 ### 文件读取与目录检查
 
 每项操作都先通过 `lstat` 拒绝不存在的路径或错误的文件类型；读取文件的操作还拒绝末端符号链接，包括指回工作区内的链接。`list` 改为跟随末端链接——任何平台上的目录符号链接，包括 Windows 目录联接——要求它解析为工作区内的目录，因此被链接的目录与其目标一样可列举；`changes` 也以同样方式把被监听的目录限制在工作区内。文件操作随后通过组合文件系统解析和读取，不做额外的工作区包含检查。配置的分页、窗口、完整文件和目录列举上限仍然适用。文本页还拒绝无效 UTF-8 与 NUL 字节；字节读取不解码内容。读取或列举的空路径是 `gateway/bad-request`。
@@ -56,6 +62,10 @@ kind: "package-reference"
 ### 变更流
 
 `changes` 是 `stream` 模式的 Remote，只接受目标路径。Host 从 `stat` 取得实际目标类型；只要当前类型是目录，就要求位于工作区内，目标类型变化后也执行该检查。一代流先注册观察队列、解析目标并建立 `fs.watch`，然后产出 `{ kind: 'ready' }`。随后产出 `{ kind: 'change', change }`，其中 `change` 为当前 stat 元数据 `{ absolutePath, version }` 或 `{ absolutePath, absent: true }`。本地提供方使用 Chokidar，目录仅监听直接子项。匹配目标的 `fs/observed` 也触发失效。流在初始化期间排队变化。取消会独立于消费方拉取帧的进度关闭 watcher，流或插件拆除等待关闭完成。父目录保持存在时，缺失文件仍可监听同一路径的重建。
+
+### 工作区搜索
+
+`search` 通过 `ctx.fs` 对 Session 工作区做广度优先遍历。`kind: 'files'` 不区分大小写地匹配文件名；`kind: 'content'` 按行匹配一个纯文本查询，除非 `ignoreCase` 为 true 否则区分大小写，并报告每行第一处命中的 1 起算 `line` 与 `column`。查询不是正则表达式，必须是不超过 512 个字符的非空单行；`limit` 缺省为 100，不得超过 `searchMaxResults`。遍历跳过 `.git`、`.hg`、`.svn`、`node_modules`、`dist`、`build`、`.next` 与 `coverage`，拒绝指向工作区外的链接，也不读取二进制或无效 UTF-8 文件。只要答案可能不完整，`truncated` 就为 true：达到了结果、目录、条目或文件大小上限，或有目录或文件无法读取。被跳过的依赖目录不会被报告，因此空且未截断的结果并不覆盖这些目录。取消调用会使其失败，而不是返回部分结果。
 
 ### 配置
 
@@ -65,6 +75,10 @@ kind: "package-reference"
 | `maxFileBytes` | `33554432`（32 MiB） | `readBytes` 未传 `range` 时的完整文件字节上限（含）；更大文件以 `too-large` 失败 |
 | `maxLines` | `5000` | 页大小的缺省值与上限（行）；更大的 `limit` 被拒绝 |
 | `maxEntries` | `2000` | 返回目录条目数上限；其余丢弃并报告截断 |
+| `searchMaxDirectories` | `5000` | 一次 `search` 最多列举的目录数，达到后停止并报告 `truncated` |
+| `searchMaxEntries` | `20000` | 一次 `search` 最多检查的目录条目数，达到后停止并报告 `truncated` |
+| `searchMaxResults` | `200` | `search` 可请求的最大 `limit` |
+| `searchMaxFileBytes` | `262144`（256 KiB） | `search` 为内容匹配读取的最大文件；更大的文件被跳过并报告 `truncated` |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-api-workspace-files)是每个可接受字段及其 JSDoc 的完备来源。
 
@@ -145,6 +159,7 @@ Typert 生成 `./typert` 与 `./remote` 暴露的 Host 与 Client Remote 产物�
 - **读取不具备事务性**——结果元数据来自内容读取之前的 stat；并发写入可能使报告版本与返回内容不一致。
 - **generation 队列无界**——一个 `changes` generation 会缓冲操作观察与目标失效通知直到消费方 pull；停滞的消费方会在流的生命期内持续增长 Host 内存。
 - **`maxEntries` 限制的是答案，不是列举**——`list` 让 `ctx.fs.listDir` 列出全部子项后再截断数组，远超上限的目录仍让 Host 付出整个列举的代价（`fs-local` 上每个子项一次 stat）；要限制这份工作，需要文件系统 seam 的 `listDir` 支持上限。
+- **搜索是实时遍历**——`search` 不维护索引，每次调用都在上限内重新读取目录树；工作区非常大时返回 `truncated` 的结果，而不是完整答案。
 - **失效流保留元数据**——Host 结束 `changes` 或流终态失败后，已打开的值保持最后已知状态，直到重新打开。
 
 <a id="dev-note"></a>

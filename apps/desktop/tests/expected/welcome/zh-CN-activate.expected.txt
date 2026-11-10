@@ -1,0 +1,7 @@
+DevinHub
+DevinHub
+激活卡密
+已登录：user@example.test。输入卡密以获得模型使用权限。
+输入卡密 [text]
+激活并进入 [disabled]
+使用其他账号

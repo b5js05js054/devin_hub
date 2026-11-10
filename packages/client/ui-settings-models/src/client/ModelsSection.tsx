@@ -29,13 +29,16 @@ import type { LlmNativeAuth, SettingsNamespaceView } from '@deepseek-ai/dsh-api-
 // Type-only: pulls this package's SlotMap merge (the two Models child slots).
 import type {} from './slot-contract.ts'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
-import { deriveKeyRef, protocolChoices, providerUsable, reasoningLevelChoices } from './store.ts'
+import { deriveKeyRef, isManagedRoute, protocolChoices, providerUsable, reasoningLevelChoices } from './store.ts'
 import type { ModelsSettingsStore, ProviderRow } from './store.ts'
 import type { ModelsOperations } from './operations.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
 import { ProviderEditor, type ProviderEditorProps } from './ProviderEditor.tsx'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
+
+/** Provider configuration is view-only: no add entry and no per-row edit entry. */
+const PROVIDERS_READ_ONLY = true
 
 /** Injected dependencies of {@link ModelsSection} (slot `inject`). */
 export interface ModelsSectionInjected {
@@ -179,7 +182,7 @@ export async function removeProviderProfile(
  * @returns whether to render the setup card.
  */
 export function needsSetup(row: ProviderRow, anyUsable: boolean): boolean {
-  if (anyUsable || row.entry.provider === 'deepseek-account') return false
+  if (anyUsable || isManagedRoute(row.entry.provider)) return false
   if (row.entry.settingsPath.length > 0) return false
   return row.credential?.configured !== true
 }
@@ -472,7 +475,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
                     ? <span className={styles['rowTag']}>{t('customTag')}</span>
                     : null}
                   {/* The store keeps the account row only while the account lists models. */}
-                  {row.entry.provider === 'deepseek-account'
+                  {isManagedRoute(row.entry.provider)
                     ? (
                       <span className={styles['accountStatus']}>
                         <span className={`${styles['credentialDot']} ${styles['credentialDotConfigured']}`} aria-hidden="true" />
@@ -502,7 +505,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
                 </span>
                 <span className={styles['rowActions']}>
                   {/* The account catalog comes from the account listing; its model overrides live in cordis.patch.yml. */}
-                  {row.entry.provider === 'deepseek-account'
+                  {isManagedRoute(row.entry.provider) || PROVIDERS_READ_ONLY
                     ? null
                     : (
                       <button
@@ -690,7 +693,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
                 : null}
             </div>
           )
-          : catalogOffered || customOffered
+          : (catalogOffered || customOffered) && !PROVIDERS_READ_ONLY
             ? (
               // One entry for both ways to gain a provider; the card behind it
               // splits them. Full width, so it lines up with the rows above.

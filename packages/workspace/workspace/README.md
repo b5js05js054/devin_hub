@@ -102,6 +102,8 @@ The API has two owners: `WorkspaceRegistry` creates, orders, and deletes project
 
 Archive admission is a capability seam over two Host events this package declares and dispatches: `workspace/session-activity` (waterfall) asks the composed providers what still runs for a Session, and `workspace/session-stop` (parallel) asks them to stop it. `archiveSession(sessionId)` asks the activity waterfall once and rejects a non-empty answer with `WorkspaceActiveSessionError`, whose `activity` lists each family with its items — the keys are the providers' own, merged into `SessionActivityKindMap`, which this package leaves empty; `archiveSession(sessionId, { stopActivity: true })` skips the activity check, writes the archive, and then dispatches the stop event, so the durable archive set already gates every wake the stops induce; a rejecting provider is logged and the archive stays. The call resolves once every provider's stop request was issued, while the stopped work settles on its own. Both questions come after the existence check and never for an already archived id. The shipped providers are the Agent registry (the running turn), the job registry seam (owned jobs), the Subagent runtime (running descendants), and the Schedule plugin (active reminders); a composition without providers archives freely.
 
+`deleteSession(sessionId)` permanently removes a Session through `SessionPersistence.delete`, then drops the id from its Workspace account and from the archive and pin sets. It resolves `true` when a Session was removed and `false` when none existed. A Session loaded in this process holds its write handle, so it is refused with `WorkspaceLoadedSessionError` and nothing is deleted.
+
 ### Source map
 
 | File | Role |

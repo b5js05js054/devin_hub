@@ -120,6 +120,24 @@ describe('desktop package target', () => {
     }, unsigned).ELECTRON_BUILDER_7Z_FILTER).toBe('ARM')
   })
 
+  it('makes built-in Windows PowerShell discoverable by electron-builder', () => {
+    expect(desktopElectronBuilderEnvironment({
+      DSH_DESKTOP_TARGET_PLATFORM: 'win32',
+      SystemRoot: 'D:\\Windows',
+      PATH: 'C:\\tools',
+    }, true).PATH).toBe('C:\\tools;D:\\Windows\\System32\\WindowsPowerShell\\v1.0')
+  })
+
+  it('preserves the existing PATH key case when appending Windows PowerShell', () => {
+    const environment = desktopElectronBuilderEnvironment({
+      DSH_DESKTOP_TARGET_PLATFORM: 'win32',
+      SystemRoot: 'D:\\Windows',
+      Path: 'C:\\tools',
+    }, true)
+    expect(environment.Path).toBe('C:\\tools;D:\\Windows\\System32\\WindowsPowerShell\\v1.0')
+    expect(environment.PATH).toBeUndefined()
+  })
+
   it('keeps Windows signing fields out of build and runtime preparation subprocesses', () => {
     expect(withoutWindowsSigningEnvironment({
       DSH_DESKTOP_WINDOWS_CER_FILE: 'C:\\release\\server.cer',

@@ -16,7 +16,11 @@
 
 - id: system-prompt
   config:
+    includeHarnessIdentity: false
     personaPrefix: >-
+      You are an AI agent powered by BaiLan.
+
+
       You are a coding agent powered by the {{model}} model.
 
 # Full-text session search is opt-in (the base row's `openAt: never`). This
@@ -146,6 +150,33 @@
 
     - id: account-controller
       name: '@deepseek-ai/dsh-api-account-controller'
+
+    - id: relay-account
+      name: '@deepseek-ai/dsh-relay-account'
+      config:
+        apiOrigin: http://devinhub.08879.cn
+        allowHttp: true
+
+    - id: relay-license
+      name: '@deepseek-ai/dsh-relay-license'
+
+    - id: relay-controller
+      name: '@deepseek-ai/dsh-api-relay-controller'
+
+    - id: media-controller
+      name: '@deepseek-ai/dsh-api-media-controller'
+      config:
+        relayURL: http://devinhub.08879.cn/api
+
+    # Relay model route: OpenAI-compatible /v1/models and /v1/chat/completions,
+    # authorized by the card-key token held by relay-license.
+    - id: llm-relay
+      name: '@deepseek-ai/dsh-llm-relay'
+      config:
+        relayURL: http://devinhub.08879.cn/api
+
+    - id: ui-relay-account
+      name: '@deepseek-ai/dsh-client-ui-relay-account'
 
     - id: settings-controller
       name: '@deepseek-ai/dsh-api-settings-controller'
@@ -312,6 +343,11 @@
     - id: ui-settings-models
       name: '@deepseek-ai/dsh-client-ui-settings-models'
 
+    # IDE workspace: file tree, Monaco editor with reviewable Agent edits,
+    # and the Session conversation as one main panel.
+    - id: ui-editor
+      name: '@deepseek-ai/dsh-client-ui-editor'
+
     # Plugin management: the sidebar Plugins page installs, enables, disables,
     # and removes the profile's bundles through the `pluginManager` Remote.
     # Without a profile-backed Host it reports itself unavailable.
@@ -411,6 +447,14 @@
     # Model selection: the /model popupSelect + composer seat over session.models.
     - id: ui-model-selection
       name: '@deepseek-ai/dsh-client-ui-model-selection'
+
+    # Generation parameter panel beside the model seat for image and video models.
+    - id: ui-media-params
+      name: '@deepseek-ai/dsh-client-ui-media-params'
+
+    # Local background image setting; the picture stays in the browser's IndexedDB.
+    - id: ui-background-image
+      name: '@deepseek-ai/dsh-client-ui-background-image'
 
     - id: ui-deepseek-model-label-1017
       name: '@deepseek-ai/dsh-client-ui-deepseek-model-label-1017'

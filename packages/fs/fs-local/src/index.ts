@@ -12,6 +12,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 import { FileSystem, FsError, FsVersion } from '@deepseek-ai/dsh-fs'
+import { trashNativePath } from '@deepseek-ai/dsh-native-command'
 import type {
   FsDirEntry,
   FsEditOutcome,
@@ -26,6 +27,7 @@ import {
   applyLiteralEdit,
   listDirectory,
   localDisplayPath,
+  makeDirectoryExclusive,
   normalizeLineEndings,
   probe,
   probeNoFollow,
@@ -34,6 +36,7 @@ import {
   readTextForDiff,
   readWholeBytes,
   readWholeText,
+  renameExclusive,
   resolveLocalTarget,
   restoreLineEndings,
   streamWholeText,
@@ -199,6 +202,25 @@ export class LocalFileSystem extends FileSystem {
     }))
   }
 
+  override async makeDirectory(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(target.targetKey, () => makeDirectoryExclusive(target, signal))
+  }
+
+  override async rename(from: FsTarget, to: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(from.targetKey, () => renameExclusive(from, to, signal))
+  }
+
+  override async trash(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(target.targetKey, async () => {
+      signal?.throwIfAborted()
+      try {
+        await trashNativePath(this.processPath(target), signal ?? new AbortController().signal)
+      } catch (cause) {
+        throw new FsError(`cannot trash "${target.displayPath}"`, 'FS_IO_ERROR', { cause })
+      }
+    })
+  }
+
   override async writeText(
     target: FsTarget,
     content: string,
@@ -275,7 +297,10 @@ export class LocalFileSystem extends FileSystem {
       }
 
       const original = await readForEdit(target.targetKey, target.displayPath, signal)
-      const edited = applyLiteralEdit(original.content, edit.oldString, edit.newString, edit.replaceAll, target.displayPath)
+      let edited = applyLiteralEdit(original.content, edit.oldString, edit.newString, edit.replaceAll, target.displayPath)
+      for (const step of edit.then ?? []) {
+        edited = applyLiteralEdit(edited.content, step.oldString, step.newString, step.replaceAll, target.displayPath)
+      }
       const content = restoreLineEndings(edited.content, original.lineEndings)
       await writeFileAtomic(target.targetKey, content, existing.mode, signal, this.internals)
 

@@ -744,6 +744,26 @@ it('retains only open saved occurrences across inactive Sessions and deduplicate
   await expect.poll(() => calls.every(call => call[2]?.aborted)).toBe(true)
 })
 
+it('keeps retained terminals of other owners when one owner replaces its own', async () => {
+  storage()
+  const otherSession = 'dormant-session' as SessionId
+  const otherId = 'other-terminal' as WebTerminalId
+  const bindings = new TerminalBindings()
+  bindings.set(sessionId, 'a', info.id)
+  bindings.set(otherSession, 'b', otherId)
+  const h = fixture()
+  const { service } = await h.service()
+  service.retainTabs([{ sessionId, tabId: 'a', contentId: 'a' }])
+  service.retainTabs([{ sessionId: otherSession, tabId: 'b', contentId: 'b' }], 'embedded')
+  await expect.poll(() => h.remote.retain).toHaveBeenCalledTimes(2)
+  const calls = vi.mocked(h.remote.retain).mock.calls
+  service.retainTabs([])
+  await expect.poll(() => calls.find(call => call[0] === sessionId)?.[2]?.aborted).toBe(true)
+  expect(calls.find(call => call[0] === otherSession)?.[2]?.aborted).toBe(false)
+  service.retainTabs([], 'embedded')
+  await expect.poll(() => calls.every(call => call[2]?.aborted)).toBe(true)
+})
+
 it('waits for the window hold acknowledgement before restoring an output attachment', async () => {
   storage()
   new TerminalBindings().set(sessionId, 'restored', info.id)

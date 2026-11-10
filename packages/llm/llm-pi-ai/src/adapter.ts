@@ -113,6 +113,13 @@ export interface PiAiAdapterOptions {
    * conversion because its stored replay state is unusable by this build.
    */
   onReplayDegrade?: (detail: { provider: string; model: string; reason: string }) => void
+  /**
+   * Request headers computed per stream call, merged over the profile headers.
+   * Harness attribution headers still win name collisions.
+   * @param options - the request being dispatched.
+   * @returns extra headers, or `undefined` for none.
+   */
+  resolveHeaders?: (options: GenerateOptions) => Readonly<Record<string, string>> | undefined
 }
 
 /** The two auth injectables a pi-ai collection is built with. */
@@ -421,7 +428,7 @@ export class PiAiAdapter extends LlmAdapter {
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        headers: requestHeaders({ ...profile.headers, ...this.config.resolveHeaders?.(options) }),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
       let exhausted = false

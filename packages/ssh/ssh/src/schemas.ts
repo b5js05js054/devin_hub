@@ -27,7 +27,8 @@ export const entriesSchema = z.array(z.object({ name: z.string(), type: z.enum([
 /** Guarded write intent. */
 export const intentSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('createIfAbsent') }).strict(), z.object({ kind: z.literal('replaceIfVersion'), version: z.string() }).strict()])
 /** Literal text edit. */
-export const editSchema = z.object({ oldString: z.string(), newString: z.string(), replaceAll: z.boolean() }).strict()
+const editStepSchema = z.object({ oldString: z.string(), newString: z.string(), replaceAll: z.boolean() }).strict()
+export const editSchema = editStepSchema.extend({ then: z.array(editStepSchema).optional() }).strict()
 /** Atomic write observation. */
 export const writeResultSchema = z.object({ operation: z.enum(['create', 'update']), version: z.string(), before: z.string().nullable(), after: z.string() }).strict()
 /** Atomic edit observation. */

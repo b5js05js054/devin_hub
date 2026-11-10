@@ -32,6 +32,7 @@ export {
 export type {
   FsEditOutcome,
   FsEditRequest,
+  FsEditStep,
   FsDirEntry,
   FsErrorCode,
   FsInfo,
@@ -270,6 +271,49 @@ export abstract class FileSystem extends Service {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsWriteOutcome>
+
+  /**
+   * Create one directory whose parent already exists. Providers that cannot
+   * create directories keep this default refusal.
+   * @param target - the resolved, absent directory target.
+   * @param signal - aborts before the directory is created.
+   * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+   * @throws FsError `FS_IO_ERROR` when the target exists or the provider lacks support.
+   */
+  makeDirectory(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    void signal
+    void sandboxPolicy
+    return Promise.reject(new FsError(`cannot create "${target.displayPath}": not supported by this provider`, 'FS_IO_ERROR'))
+  }
+
+  /**
+   * Move a file or directory to an absent path. Providers that cannot rename keep this default refusal.
+   * @param from - the resolved existing source.
+   * @param to - the resolved destination, which must not exist.
+   * @param signal - aborts before the move.
+   * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+   * @throws FsError `FS_IO_ERROR` when the destination exists or the provider lacks support.
+   */
+  rename(from: FsTarget, to: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    void to
+    void signal
+    void sandboxPolicy
+    return Promise.reject(new FsError(`cannot rename "${from.displayPath}": not supported by this provider`, 'FS_IO_ERROR'))
+  }
+
+  /**
+   * Move a file or directory to the host's recycle bin or trash. Providers
+   * without a trash keep this default refusal rather than deleting permanently.
+   * @param target - the resolved existing entry.
+   * @param signal - aborts the trash command.
+   * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+   * @throws FsError `FS_IO_ERROR` when the provider has no trash.
+   */
+  trash(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    void signal
+    void sandboxPolicy
+    return Promise.reject(new FsError(`cannot trash "${target.displayPath}": not supported by this provider`, 'FS_IO_ERROR'))
+  }
 
   /**
    * Atomically edit literal text. When supplied, the version guard is checked

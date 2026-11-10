@@ -60,7 +60,9 @@ async function mountPlugin() {
     tabDomain: { occurrence }, openTabIn, tabsIn, openTabs, commandTarget, openTabFromTarget,
     registerCloseHandler: (kind: string, handler: SidebarRightCloseHandler) => { expect(kind).toBe('terminal'); closeHandler = handler; return () => { closeHandler = undefined } },
   } as never)
+  const factories: { name: string; scope: string; inject: (sessionId: SessionId) => any }[] = []
   ctx.provide('slots', {
+    registerFactory: (options: (typeof factories)[number]) => { factories.push(options); return () => { factories.splice(factories.indexOf(options), 1) } },
     inject: (_name: string, register: () => () => void) => register(),
     register: (options: Omit<typeof entries[number], 'component'>, component: unknown) => { const entry = { ...options, component }; entries.push(entry); return () => { entries.splice(entries.indexOf(entry), 1) } },
   } as never)
@@ -76,7 +78,7 @@ async function mountPlugin() {
   ctx.provide('theme', { getTheme: () => theme } as never)
   const fiber = await ctx.plugin({ inject, apply })
   return {
-    tabs, entries, dictionaries, terminals, model, occurrence, openTabIn, tabsIn, openTabs, theme,
+    tabs, entries, factories, dictionaries, terminals, model, occurrence, openTabIn, tabsIn, openTabs, theme,
     commandTarget, openTabFromTarget, commands,
     emitTheme() { ctx.emit('theme/change', theme) },
     get closeHandler() { return closeHandler },
@@ -173,11 +175,26 @@ it('retains terminal metadata from dormant layouts and releases its inventory su
   const h = await mountPlugin()
   const terminal = { sessionId: 'inactive' as SessionId, tabId: 't', kind: 'terminal', contentId: 'terminal' } as SidebarRightOpenTab
   h.openTabs.set([terminal, { ...terminal, kind: 'documentPreview', contentId: 'file' }])
-  await expect.poll(() => h.terminals.retainTabs).toHaveBeenLastCalledWith([terminal])
+  await expect.poll(() => h.terminals.retainTabs).toHaveBeenLastCalledWith([terminal], 'sidebar')
   await h.dispose()
-  expect(h.terminals.retainTabs).toHaveBeenLastCalledWith([])
+  expect(h.terminals.retainTabs).toHaveBeenLastCalledWith([], 'sidebar')
   const calls = h.terminals.retainTabs.mock.calls.length
   h.openTabs.set([terminal])
   await Promise.resolve()
   expect(h.terminals.retainTabs).toHaveBeenCalledTimes(calls)
+})
+
+it('retains the embedded terminal under its own owner and releases it on unmount', async () => {
+  const h = await mountPlugin()
+  const sessionId = 'session' as SessionId
+  expect(h.factories.map(factory => [factory.name, factory.scope])).toEqual([['terminal.embedded', 'session']])
+  const face = h.factories[0]!.inject(sessionId)
+  face.view('a')
+  expect(h.terminals.view).toHaveBeenLastCalledWith(sessionId, 'embedded:a', `embedded:${sessionId}:a`)
+  const release = face.hold('a')
+  expect(h.terminals.retainTabs).toHaveBeenLastCalledWith([{ sessionId, tabId: 'embedded:a', contentId: `embedded:${sessionId}:a` }], 'embedded')
+  release()
+  expect(h.terminals.retainTabs).toHaveBeenLastCalledWith([], 'embedded')
+  await h.dispose()
+  expect(h.factories).toEqual([])
 })

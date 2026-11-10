@@ -410,6 +410,16 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
  * @returns one snapshot per stored session.
  */
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+/**
+ * Permanently remove one stored session and every artifact it owns. The
+ * session must have no active write handle in any process.
+ * @param id - the stored session to remove.
+ * @param options - optional cancellation.
+ * @returns `true` when a session was removed, `false` when it did not exist.
+ * @throws {SessionAlreadyOwnedError} when an active write handle owns the session.
+ */
+delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<boolean>
 ```
 
 Types: [SessionId](core.md)

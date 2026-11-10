@@ -17,7 +17,7 @@ vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
 import { release as osRelease } from 'node:os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { canOpenNativePath, nativeFileManager, revealNativePath, openNativeAssociatedPath, openNativePath, openNativeTextFile, type PathOpenerRunner } from '../src/index.ts'
+import { canOpenNativePath, nativeFileManager, revealNativePath, trashNativePath, openNativeAssociatedPath, openNativePath, openNativeTextFile, type PathOpenerRunner } from '../src/index.ts'
 
 const signal = () => new AbortController().signal
 
@@ -491,4 +491,31 @@ it.each(['.html', '.svg'])('uses the file association for %s despite a configure
     })
     expect(run.mock.calls).toEqual([[platform === 'darwin' ? 'open' : 'xdg-open', [path], lifetime, 'hidden']])
   }
+})
+
+
+describe('native trash', () => {
+  it.each([
+    ['linux', '/tmp/a b.txt', 'gio', ['trash', '--', '/tmp/a b.txt']],
+  ] as const)('moves a path to the trash through %s', async (platform, path, command, args) => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await trashNativePath(path, signal(), { platform, run })
+    expect(run).toHaveBeenCalledExactlyOnceWith(command, args, expect.any(AbortSignal), 'hidden')
+  })
+
+  it("quotes a Windows path's single quotes inside the PowerShell literal", async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await trashNativePath("C:\work\it's.txt", signal(), { platform: 'win32', run })
+    const script = run.mock.calls[0]![1].at(-1)!
+    expect(run.mock.calls[0]![0]).toBe('powershell.exe')
+    expect(script).toContain("'C:\work\it''s.txt'")
+    expect(script).toContain('SendToRecycleBin')
+  })
+
+  it('rejects on an unsupported platform and on an aborted signal', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await expect(trashNativePath('/x', signal(), { platform: 'aix', run })).rejects.toThrow('unsupported')
+    await expect(trashNativePath('/x', AbortSignal.abort(new Error('cancelled')), { run })).rejects.toThrow('cancelled')
+    expect(run).not.toHaveBeenCalled()
+  })
 })

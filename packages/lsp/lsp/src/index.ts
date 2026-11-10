@@ -7,7 +7,7 @@
  * {@link Lsp.registerProvider} validates and conflict-checks everything before mutating, so an
  * invalid or conflicting registration publishes nothing, and its disposer releases every
  * reservation together. Selection routes a query by the file's final extension; it never depends on
- * registration order. The seam exposes exactly the four operations and no JSON-RPC escape hatch.
+ * registration order. The seam exposes exactly the six operations and no JSON-RPC escape hatch.
  * @module @deepseek-ai/dsh-lsp
  */
 
@@ -23,6 +23,7 @@ import type {
 
 export { LspProviderId } from './brand.ts'
 export type {
+  LspDiagnostic,
   LspHover,
   LspLocation,
   LspOperation,
@@ -33,6 +34,8 @@ export type {
   LspQueryResult,
   LspRange,
   LspService,
+  LspSeverity,
+  LspSymbol,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {

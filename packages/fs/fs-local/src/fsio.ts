@@ -834,3 +834,53 @@ export function applyLiteralEdit(
 }
 
 export { normalizeLineEndings, restoreLineEndings }
+
+/** Translate a mutation failure into the structured taxonomy; `verb` names the attempted operation. */
+function mutationError(verb: string, displayPath: string, error: unknown): FsError {
+  if (error instanceof FsError) return error
+  if (isENOENT(error) || isENOTDIR(error)) return new FsError(`cannot ${verb} "${displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+  if (isEEXIST(error)) return new FsError(`cannot ${verb} "${displayPath}": already exists`, 'FS_IO_ERROR', { cause: error })
+  if (isPermissionError(error)) return new FsError(`cannot ${verb} "${displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: error })
+  return new FsError(`cannot ${verb} "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+}
+
+/**
+ * Create one directory under an existing parent, failing when the path already exists.
+ * @param target - absolute path and display path of the directory to create.
+ * @param signal - checked before the syscall.
+ * @throws FsError `FS_IO_ERROR` when the path exists, `FS_NOT_FOUND` when the parent is missing.
+ */
+export async function makeDirectoryExclusive(target: { displayPath: string; targetKey: string }, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'mkdir')
+  try {
+    await mkdir(target.targetKey)
+  } catch (error) {
+    throw mutationError('create', target.displayPath, error)
+  }
+}
+
+/**
+ * Move an entry to a path that does not exist yet; an existing destination is refused, never replaced.
+ * @param from - existing source path pair.
+ * @param to - destination path pair.
+ * @param signal - checked before the syscall.
+ * @throws FsError `FS_NOT_FOUND` when the source is absent, `FS_IO_ERROR` when the destination exists.
+ */
+export async function renameExclusive(
+  from: { displayPath: string; targetKey: string },
+  to: { displayPath: string; targetKey: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal, 'rename')
+  if (await probeNoFollow(from.targetKey) === null) {
+    throw new FsError(`cannot rename "${from.displayPath}": not found`, 'FS_NOT_FOUND')
+  }
+  if (await probeNoFollow(to.targetKey) !== null) {
+    throw new FsError(`cannot rename to "${to.displayPath}": already exists`, 'FS_IO_ERROR')
+  }
+  try {
+    await rename(from.targetKey, to.targetKey)
+  } catch (error) {
+    throw mutationError('rename', from.displayPath, error)
+  }
+}

@@ -6,6 +6,8 @@
  */
 
 import type {
+  LspDiagnostic,
+  LspSymbol,
   LspHover,
   LspLocation,
   LspOperation,
@@ -35,6 +37,8 @@ export function requestMethod(operation: LspOperation): string {
     case 'findReferences': return 'textDocument/references'
     case 'goToImplementation': return 'textDocument/implementation'
     case 'hover': return 'textDocument/hover'
+    case 'documentSymbol': return 'textDocument/documentSymbol'
+    case 'diagnostics': return 'textDocument/diagnostic'
     /* v8 ignore next -- exhaustive over the closed LspOperation union; unreachable. */
     default: return assertNever(operation, 'requestMethod')
   }
@@ -47,6 +51,8 @@ function capabilityValue(capabilities: WireServerCapabilities, operation: LspOpe
     case 'findReferences': return capabilities.referencesProvider
     case 'goToImplementation': return capabilities.implementationProvider
     case 'hover': return capabilities.hoverProvider
+    case 'documentSymbol': return capabilities.documentSymbolProvider
+    case 'diagnostics': return capabilities.diagnosticProvider
     /* v8 ignore next -- exhaustive over the closed LspOperation union; unreachable. */
     default: return assertNever(operation, 'capabilityValue')
   }
@@ -191,6 +197,57 @@ export function normalizeHover(payload: unknown): LspHover | null {
   if (range === undefined) return { contents }
   if (!isRange(range)) throw malformedResponse('LSP hover result contained a malformed range')
   return { contents, range: toRange(range) }
+}
+
+const SYMBOL_KINDS = [
+  'File', 'Module', 'Namespace', 'Package', 'Class', 'Method', 'Property', 'Field', 'Constructor', 'Enum',
+  'Interface', 'Function', 'Variable', 'Constant', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Key',
+  'Null', 'EnumMember', 'Struct', 'Event', 'Operator', 'TypeParameter',
+] as const
+
+/** Normalize a `textDocument/documentSymbol` result (`DocumentSymbol[]` or `SymbolInformation[]`) to a flat, depth-annotated outline. */
+export function normalizeDocumentSymbols(payload: unknown): LspSymbol[] {
+  if (payload === null) return []
+  if (!Array.isArray(payload)) throw malformedResponse('LSP documentSymbol result was not an array')
+  const symbols: LspSymbol[] = []
+  const walk = (items: readonly unknown[], depth: number): void => {
+    for (const item of items) {
+      if (item === null || typeof item !== 'object') throw malformedResponse('LSP documentSymbol result contained a non-object entry')
+      const record = item as Record<string, unknown>
+      const range = isRange(record.range) ? record.range
+        : record.location !== null && typeof record.location === 'object' && isRange((record.location as Record<string, unknown>).range)
+          ? (record.location as { range: WireRange }).range : undefined
+      if (typeof record.name !== 'string' || range === undefined) throw malformedResponse('LSP documentSymbol entry had no name or range')
+      const kind = typeof record.kind === 'number' ? SYMBOL_KINDS[record.kind - 1] ?? 'Unknown' : 'Unknown'
+      symbols.push({
+        name: record.name, kind, range: toRange(range), depth,
+        ...typeof record.detail === 'string' && record.detail !== '' ? { detail: record.detail } : {},
+      })
+      if (Array.isArray(record.children)) walk(record.children, depth + 1)
+    }
+  }
+  walk(payload, 0)
+  return symbols
+}
+
+const SEVERITIES = ['error', 'warning', 'information', 'hint'] as const
+
+/** Normalize a `textDocument/diagnostic` pull report (`full` or `unchanged`) to diagnostics. */
+export function normalizeDiagnostics(payload: unknown): LspDiagnostic[] {
+  if (payload === null || payload === undefined || typeof payload !== 'object') throw malformedResponse('LSP diagnostic result was not an object')
+  const report = payload as Record<string, unknown>
+  if (report.kind === 'unchanged') return []
+  if (report.kind !== 'full' || !Array.isArray(report.items)) throw malformedResponse('LSP diagnostic report was neither full nor unchanged')
+  return report.items.map((item: unknown): LspDiagnostic => {
+    const record = (item ?? {}) as Record<string, unknown>
+    if (!isRange(record.range) || typeof record.message !== 'string') throw malformedResponse('LSP diagnostic entry had no range or message')
+    const severity = typeof record.severity === 'number' ? SEVERITIES[record.severity - 1] ?? 'error' : 'error'
+    return {
+      range: toRange(record.range), severity, message: record.message,
+      ...typeof record.source === 'string' ? { source: record.source } : {},
+      ...typeof record.code === 'string' || typeof record.code === 'number' ? { code: String(record.code) } : {},
+    }
+  })
 }
 
 /** Render the three `Hover.contents` encodings into one string (input is untrusted wire data). */

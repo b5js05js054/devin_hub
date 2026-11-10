@@ -306,9 +306,50 @@ export function toWorkdirRelative(path: string, workdir: string): string {
   return rel
 }
 
+/**
+ * VCS metadata directories no search descends into. Each gets TWO negated
+ * globs: the any-depth directory glob prunes it during traversal, and the
+ * contents glob still excludes the internals when the search root is at or
+ * inside the directory.
+ */
+export const SEARCH_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']
+
+/**
+ * Dependency and build-output directories pruned during traversal. Only the
+ * directory glob is used, so a search whose explicit root is inside one of
+ * them still sees its contents.
+ */
+export const SEARCH_PRUNED_DIRS: readonly string[] = ['node_modules', 'dist', 'target']
+
+/**
+ * The scope flags shared by `glob` and `grep`, so both tools see the same
+ * files: hidden and ignored files included, VCS metadata and
+ * {@link SEARCH_PRUNED_DIRS} excluded.
+ *
+ * @returns ripgrep arguments to splice after the tool's own globs, so these negations win.
+ */
+export function searchScopeArgs(): string[] {
+  return [
+    '--no-ignore',
+    '--hidden',
+    ...SEARCH_VCS_EXCLUDES.flatMap(name => [`--glob=!**/${name}`, `--glob=!**/${name}/**`]),
+    ...SEARCH_PRUNED_DIRS.map(name => `--glob=!**/${name}`),
+  ]
+}
+
 /** One parsed match: the file, the 1-based line number, and the (possibly previewed) line text. */
 export interface GrepMatch {
   path: string
+  lineNumber: number
+  line: string
+  /** Unmatched lines printed before this match (only when `contextLines` was requested). */
+  before?: GrepContextLine[]
+  /** Unmatched lines printed after this match (only when `contextLines` was requested). */
+  after?: GrepContextLine[]
+}
+
+/** One unmatched context line around a {@link GrepMatch}. */
+export interface GrepContextLine {
   lineNumber: number
   line: string
 }
@@ -344,7 +385,18 @@ export function previewLine(line: string, maxBytes: number): string {
  */
 export function retainGrepMatches(matches: GrepMatch[], maxMatches: number, maxLineBytes: number): RetainedItems<GrepMatch> {
   const retainer = new ItemRetainer<GrepMatch>({ kind: 'head', maxItems: maxMatches })
-  for (const match of matches) retainer.push({ ...match, line: previewLine(match.line, maxLineBytes) })
+  const preview = (lines: GrepContextLine[] | undefined) => lines?.map(item => ({ ...item, line: previewLine(item.line, maxLineBytes) }))
+  for (const match of matches) {
+    const before = preview(match.before)
+    const after = preview(match.after)
+    retainer.push({
+      path: match.path,
+      lineNumber: match.lineNumber,
+      line: previewLine(match.line, maxLineBytes),
+      ...before !== undefined ? { before } : {},
+      ...after !== undefined ? { after } : {},
+    })
+  }
   return retainer.finish()
 }
 

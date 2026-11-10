@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to preview files readable through a Session's filesystem from the web client. It reads UTF-8 text by page, reads bounded byte windows or complete files, resolves related files from a base file's directory, and reports file metadata. Follow changes to a file or a directory's direct entries. File reads and watches may target paths outside the workspace; directory listing and watches remain workspace-scoped. The service exposes no mutation operation.
+Use this package to preview files readable through a Session's filesystem from the web client. It reads UTF-8 text by page, reads bounded byte windows or complete files, resolves related files from a base file's directory, and reports file metadata. Follow changes to a file or a directory's direct entries. File reads and watches may target paths outside the workspace; directory listing and watches remain workspace-scoped. It can also replace the complete text of one existing workspace file, refusing the write when the file changed since you read it.
 
 ## Table of Contents
 
@@ -33,6 +33,8 @@ Mount the package beside `dsh-fs`, `dsh-sandbox-policy`, the Session store, and 
 | `read(path, { offset?, limit? })` | `WorkspaceFileText` = stat + `{ offset, text, lines, eof }` | One window of lines from a UTF-8 text file; `lines` counts them, so one empty line and a page past the end read differently |
 | `readBytes(path, { range?, baseFile? })` | `WorkspaceFileBytes` = stat + `{ offset, data, eof }` | Complete file or bounded byte range as `Uint8Array`; optionally resolve from another file's directory |
 | `list(path)` | `WorkspaceDirectoryListing { path, entries, truncated }` | Direct children of one directory |
+| `search({ kind, query, limit?, ignoreCase? })` | `WorkspaceSearchResult { matches, truncated }` | Bounded search of the workspace tree by file name or by text; `truncated` means the result may be partial |
+| `write(path, content, expectedVersion)` | `WorkspaceFileStat` | Replaces the complete UTF-8 text of an existing regular file inside the workspace; a different current version fails `workspace-file/stale-version` and writes nothing |
 | `changes(path)` | stream of `WorkspaceFileWatchFrame` | Subscription readiness, then invalidations of one file or a directory's direct entries |
 
 ### Addressing and paths
@@ -49,6 +51,10 @@ Mount the package beside `dsh-fs`, `dsh-sandbox-policy`, the Session store, and 
 
 Pass the required options object as `{}` for a complete file under `maxFileBytes`, or `{ range: {} }` for the default byte window under `maxBytes`. Oversized complete files fail rather than arriving truncated. `baseFile` and `range` can be combined, and windows remain independent of the complete-file cap. The binary Remote uses Connection's multipart response with JSON metadata and raw bytes; the generated Client returns `Uint8Array<ArrayBuffer>` without base64 decoding. Caller cancellation reaches the filesystem. The endpoint returns data, not a navigable document.
 
+### Write checks
+
+`write` accepts only a path that resolves inside the Session workspace root and names an existing regular file; it never creates a file, directory, or link target. Content with NUL bytes fails `workspace-file/not-text`, and content over the complete-file cap fails `workspace-file/too-large`. The write goes through the composed filesystem with a `replaceIfVersion` guard and the sandbox policy resolved for the Session, so the sandbox can still refuse it.
+
 ### File-read and directory checks
 
 Every operation first uses `lstat` to reject a missing path or the wrong file kind; the file-reading operations also refuse a final symlink, even one pointing back inside the workspace. `list` instead follows a final link — a directory symlink on any platform, including a Windows junction — and requires it to resolve to a directory inside the workspace root, so a linked directory lists like its target; `changes` confines the watched directory the same way. File operations then resolve and read through the composed filesystem without an additional workspace-containment check. The configured page, window, complete-file, and listing caps still apply. Text pages additionally reject invalid UTF-8 and NUL bytes; byte reads do not decode content. An empty read or listing path is a `gateway/bad-request`.
@@ -56,6 +62,10 @@ Every operation first uses `lstat` to reject a missing path or the wrong file ki
 ### The change feed
 
 `changes` is a `stream` Remote accepting only a target path. The Host derives the target's type from `stat` and requires workspace containment whenever that type is a directory, including after a type change. A generation registers its observation queue, resolves the target, and starts `fs.watch` before yielding `{ kind: 'ready' }`. It then yields `{ kind: 'change', change }`, where `change` is current stat metadata `{ absolutePath, version }` or `{ absolutePath, absent: true }`. Local providers use Chokidar; directories watch only direct entries. Matching `fs/observed` emissions also invalidate the target. The generation queues changes during setup. Cancellation closes the watcher independently of consumer pulls, and generation or plugin teardown awaits closure. Missing files remain watchable for same-path recreation while their parent directory remains.
+
+### Workspace search
+
+`search` walks the Session workspace breadth first through `ctx.fs`. `kind: 'files'` matches file names case-insensitively; `kind: 'content'` matches one plain-text query per line, case-sensitively unless `ignoreCase` is true, and reports the 1-based `line` and `column` of the first hit on each line. The query is not a regular expression and must be one non-empty line of at most 512 characters; `limit` defaults to 100 and may not exceed `searchMaxResults`. The walk skips `.git`, `.hg`, `.svn`, `node_modules`, `dist`, `build`, `.next`, and `coverage`, refuses links that leave the workspace, and does not read binary or invalid UTF-8 files. `truncated` is true whenever the answer may be incomplete: a result, directory, entry, or file-size limit was reached, or a directory or file could not be read. A skipped dependency directory is not reported, so an empty, untruncated result does not cover those directories. Cancelling the call fails it rather than returning a partial result.
 
 ### Configuration
 
@@ -65,6 +75,10 @@ Every operation first uses `lstat` to reject a missing path or the wrong file ki
 | `maxFileBytes` | `33554432` (32 MiB) | Inclusive complete-file cap for `readBytes` without `range`; larger files fail with `too-large` |
 | `maxLines` | `5000` | Default and largest page size in lines; a larger `limit` is refused |
 | `maxEntries` | `2000` | Cap on returned directory entries; the rest is dropped and reported cut |
+| `searchMaxDirectories` | `5000` | Directories one `search` may list before it stops and reports `truncated` |
+| `searchMaxEntries` | `20000` | Directory entries one `search` may examine before it stops and reports `truncated` |
+| `searchMaxResults` | `200` | Largest `limit` a `search` may request |
+| `searchMaxFileBytes` | `262144` (256 KiB) | Largest file `search` reads for a content match; larger files are skipped and reported `truncated` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-api-workspace-files) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -145,6 +159,7 @@ None; this package neither assembles nor sends a provider request.
 - **Reads are not transactional** — result metadata comes from stat before content is read; a concurrent write can make the reported version and returned contents differ.
 - **Unbounded generation queue** — a `changes` generation buffers operation observations and target invalidations until its consumer pulls; a stalled consumer grows Host memory for the life of the stream.
 - **`maxEntries` bounds the answer, not the listing** — `list` asks `ctx.fs.listDir` for every child and cuts the array afterwards, so a directory far above the cap still costs the Host the whole listing (on `fs-local`, one stat per child); bounding that work needs a limit on the filesystem seam's `listDir`.
+- **Search is a live walk** — `search` keeps no index, so each call re-reads the tree within its limits; a very large workspace returns `truncated` results instead of a complete answer.
 - **Dead feeds retain metadata** — after the Host ends `changes` or the stream fails terminally, open values retain their last state until reopened.
 
 <a id="dev-note"></a>

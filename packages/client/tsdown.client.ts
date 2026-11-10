@@ -38,6 +38,18 @@ const INLINE_CSS_QUERY = '?inline'
 /** Image imports become base64 data URLs embedded in the plugin's own bundle. */
 const IMAGE_MEDIA_TYPES = new Map([['.svg', 'image/svg+xml'], ['.png', 'image/png'], ['.webp', 'image/webp']])
 
+/** Replace relative `.ttf` `url()` references with data URIs, since a plugin ships no sibling asset files. */
+async function inlineFontUrls(fileId: string, css: string): Promise<string> {
+  const urls = new Set<string>()
+  for (const match of css.matchAll(/url\(["']?(\.{1,2}\/[^)"']+\.ttf)["']?\)/g)) urls.add(match[1]!)
+  let result = css
+  for (const url of urls) {
+    const data = await readFile(resolvePath(dirname(fileId), url))
+    result = result.replaceAll(url, `data:font/ttf;base64,${data.toString('base64')}`)
+  }
+  return result
+}
+
 /** Emit one plugin-owned style injector and an optional CSS Modules export. */
 function styleInjectionModule(
   id: string,
@@ -630,7 +642,7 @@ function clientConfig(
         this.addWatchFile(fileId)
         const source = await readFile(fileId)
         const { code } = transform({ filename: fileId, code: source, minify: true })
-        return styleInjectionModule(id, fileId, code.toString())
+        return styleInjectionModule(id, fileId, await inlineFontUrls(fileId, code.toString()))
       },
     }, {
       name: 'dsh-image-inline',

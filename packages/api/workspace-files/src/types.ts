@@ -19,6 +19,11 @@
 import type {} from '@deepseek-ai/dsh-typert-protocol'
 
 /** Identity and freshness of one workspace file, without its content. */
+/** The entry a create or rename produced, in the same absolute form as {@link WorkspaceFileStat.absolutePath}. */
+export interface WorkspaceEntryResult {
+  readonly absolutePath: string
+}
+
 export interface WorkspaceFileStat {
   /**
    * Absolute path of the file in the filesystem's execution world, symlinks
@@ -122,6 +127,35 @@ export interface WorkspaceDirectoryListing {
   readonly truncated: boolean
 }
 
+/** Bounded filename or literal text discovery within a Session workspace. */
+export interface WorkspaceSearchRequest {
+  /** Literal, non-empty text; never interpreted as a regular expression. */
+  readonly query: string
+  /** Match basenames or lines of text files. */
+  readonly kind: 'files' | 'content'
+  /** Fold case while matching. Defaults to true for filenames and false for content. */
+  readonly ignoreCase?: boolean
+  /** Maximum matches, default 100 and at most 200. */
+  readonly limit?: number
+}
+
+/** One filename or text-line match. Lines and columns are 1-based. */
+export interface WorkspaceSearchMatch {
+  readonly absolutePath: string
+  /** `/`-joined path relative to the workspace. */
+  readonly path: string
+  readonly line?: number
+  readonly column?: number
+  readonly text?: string
+}
+
+/** Results are capped and exclude generated/dependency directories and directory links. */
+export interface WorkspaceSearchResult {
+  readonly matches: readonly WorkspaceSearchMatch[]
+  /** Whether the result or traversal bound omitted possible matches. */
+  readonly truncated: boolean
+}
+
 /**
  * Current target metadata after a filesystem invalidation. File consumers may
  * ignore an already known version; directory consumers relist on every frame
@@ -162,6 +196,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'workspace-file/too-large': { readonly path: string; readonly limit: number }
     /** The content read so far is not decodable UTF-8 text, or the page carries NUL bytes. */
     'workspace-file/not-text': { readonly path: string }
+    /** The file's current version differs from the one the writer last read; nothing was written. */
+    'workspace-file/stale-version': { readonly path: string }
     /** The path is not a regular file, so it has no text to read. */
     'workspace-file/not-regular-file': {
       readonly path: string

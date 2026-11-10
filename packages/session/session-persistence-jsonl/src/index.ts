@@ -27,13 +27,13 @@ import {
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
-  type SessionLocation, type SessionPersistenceCreateOptions,
+  type SessionLocation, type SessionPersistenceCreateOptions, type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
 import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
-import { SessionWriteLease } from './lease.ts'
+import { LEASE_FILENAME, SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
 import {
@@ -461,6 +461,40 @@ class JsonlSessionPersistence extends SessionPersistence {
         throw new AggregateError([failure, releaseFailure], `session "${id}": write open failed and its lock release failed`)
       }
       throw failure
+    }
+  }
+
+  /**
+   * Permanently remove a stored session directory. Holding the write claim and
+   * the cross-process lease proves no other writer owns it; every file but the
+   * held lock is removed first so the lock itself can be released and deleted.
+   * @param id - the stored session to remove.
+   * @param options - optional cancellation.
+   * @returns `true` when removed, `false` when the session did not exist.
+   * @throws {SessionAlreadyOwnedError} when an active write handle owns the session.
+   */
+  override async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<boolean> {
+    options?.signal?.throwIfAborted()
+    await this.ensureRootEncoding()
+    this.tracker.claimWrite(id)
+    let lease: SessionWriteLease | undefined
+    try {
+      const resolved = await this.findLog(id, options?.signal)
+      if (resolved === undefined) return false
+      const dir = dirname(resolved.currentPath)
+      lease = await this.acquireLease(id, undefined, dir)
+      options?.signal?.throwIfAborted()
+      for (const entry of await readdir(dir)) {
+        if (entry !== LEASE_FILENAME) await rm(join(dir, entry), { recursive: true, force: true })
+      }
+      await lease.release()
+      lease = undefined
+      await rm(dir, { recursive: true, force: true })
+      this.coldLogMemo.delete(id)
+      return true
+    } finally {
+      await lease?.release()
+      this.tracker.releaseClaim(id)
     }
   }
 

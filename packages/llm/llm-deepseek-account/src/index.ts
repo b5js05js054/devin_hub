@@ -95,7 +95,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     return { ...resolved.protocol, models: result.resolution, catalog: result }
   }
-  const entry = { provider: PROVIDER, displayName: 'DeepSeek Account', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] }
+  const entry = { provider: PROVIDER, displayName: 'BaiLan Account', settingsNs: ctx.fiber.entry?.options.id ?? name, settingsPath: [] }
   const directory = ctx.llm.registerConfigurableProviders([entry])
   let reportedError: string | undefined
   /** Publish override diagnostics on the provider directory. */

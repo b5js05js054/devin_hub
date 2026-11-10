@@ -182,6 +182,9 @@ const RESOURCE_SCHEME = 'dsh-resource://'
 /** Synchronous close/replacement hook; resource owners retain any background cleanup. */
 export type SidebarRightCloseHandler = (sessionId: SessionId, tab: TabRecord) => void
 
+/** Opens an address while no Session surface is on screen; returns whether it did. */
+export type SidebarRightFallbackOpener = (address: string, options: SidebarRightOpenResourceOptions) => boolean
+
 /** The outward right-Sidebar face (`ctx.sidebarRight`). */
 export interface ISidebarRight {
   /**
@@ -267,6 +270,18 @@ export class SidebarRightController implements ISidebarRight {
   private readonly adopted: ReadonlyMap<SessionId, Adoption>
   private readonly rooms: ReadonlyMap<SessionId, RoomRule>
   private readonly closeHandlers = new Map<string, SidebarRightCloseHandler>()
+  private readonly fallbackOpeners = new Set<SidebarRightFallbackOpener>()
+
+  /**
+   * Register an opener consulted by `openResource` while no Session surface is on screen,
+   * such as a main panel that shows files itself.
+   * @param opener - returns whether it opened the address.
+   * @returns an effect-scoped unregister callback.
+   */
+  registerFallbackOpener(opener: SidebarRightFallbackOpener): () => void {
+    this.fallbackOpeners.add(opener)
+    return () => { this.fallbackOpeners.delete(opener) }
+  }
 
   /**
    * Register resource cleanup before explicit removal. Failure preserves the tab.
@@ -320,6 +335,9 @@ export class SidebarRightController implements ISidebarRight {
    * @param options - placement, the opening type, and navigation parameters.
    */
   openResource(address: string, options: SidebarRightOpenResourceOptions = {}): void {
+    if (this.mountedSurface() === undefined) {
+      for (const opener of this.fallbackOpeners) if (opener(address, options)) return
+    }
     const { sessionId, actions } = this.require()
     this.placeResource(sessionId, actions, address, options)
   }

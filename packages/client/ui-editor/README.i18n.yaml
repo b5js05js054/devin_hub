@@ -1,0 +1,70 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/client/ui-editor/README.md
+/:
+  en: 441eaa69a1c30040
+  zh: 90aba947df507048
+/deepseek-ai-dsh-client-ui-editor:
+  en: 56ad31c8070a2a8d
+  zh: 1a8f9b5673e5250b
+/deepseek-ai-dsh-client-ui-editor/summary:
+  en: 9d1ee696bae3cb79
+  zh: 9c557574fe0fb484
+/deepseek-ai-dsh-client-ui-editor/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-client-ui-editor/use-this-package:
+  en: 957f4cf082e55441
+  zh: a32a707522028553
+/deepseek-ai-dsh-client-ui-editor/use-this-package/open-edit-and-save:
+  en: 563e3e8626c1e27d
+  zh: fd58e425e9092dbb
+/deepseek-ai-dsh-client-ui-editor/use-this-package/search-and-quick-open:
+  en: 15692cdddb1e1d6c
+  zh: 591756ebd0b8e801
+/deepseek-ai-dsh-client-ui-editor/use-this-package/keyboard:
+  en: 15ae073e036949ab
+  zh: 53511fef5edcfc88
+/deepseek-ai-dsh-client-ui-editor/use-this-package/review-the-agent-s-edits:
+  en: 8c4dbf17fb9b07f1
+  zh: b67358d844864b77
+/deepseek-ai-dsh-client-ui-editor/use-this-package/layout-and-conversation:
+  en: b3d735c8c48084ef
+  zh: b0fd9fa21810af44
+/deepseek-ai-dsh-client-ui-editor/use-this-package/terminal:
+  en: dfbcb1b5938cf0e2
+  zh: fcdee9d413370f8e
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: c5500056b41ce570
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation/registration:
+  en: 0f6f55e42fc3f8a8
+  zh: 583e7e7adf7035cf
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation/state-and-i-o:
+  en: 1a54c83cdcc3f5cc
+  zh: dbdee198c4170b2f
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation/review:
+  en: b6ea90b0a515e67d
+  zh: 882340a4f0bf06d2
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation/editor:
+  en: 7de4ff5f61084f38
+  zh: ae0858e037736c7b
+/deepseek-ai-dsh-client-ui-editor/understand-the-implementation/terminal:
+  en: ac0db4b23f34962f
+  zh: 7bbb4774d817ff74
+/deepseek-ai-dsh-client-ui-editor/further-exploration:
+  en: f6922e02df9c9525
+  zh: 2a31b0850fefc0d5
+/deepseek-ai-dsh-client-ui-editor/model-experience:
+  en: cfcdc4616737ec0d
+  zh: 6e1b22138074b4b0
+/deepseek-ai-dsh-client-ui-editor/model-experience/kv-cache-effect:
+  en: ca75c51c89c2c9b0
+  zh: 2064958b0754647e
+/deepseek-ai-dsh-client-ui-editor/known-limitations-and-deferred-work:
+  en: f9a7784d2dacd4eb
+  zh: 480bf712b544de3e
+/deepseek-ai-dsh-client-ui-editor/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98

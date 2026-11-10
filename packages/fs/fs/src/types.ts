@@ -143,14 +143,23 @@ export interface FsWriteOutcome {
   after: string
 }
 
-/** A literal-replacement edit request. */
-export interface FsEditRequest {
+/** One literal replacement inside an {@link FsEditRequest}. */
+export interface FsEditStep {
   /** Literal non-empty text to replace. Must match exactly (after line-ending normalization). */
   oldString: string
   /** Literal replacement text. An empty string deletes the matched text. */
   newString: string
   /** Replace every match instead of requiring exactly one. */
   replaceAll: boolean
+}
+
+/**
+ * A literal-replacement edit request. `then` lists further replacements applied in order to the
+ * result of the previous one; the whole batch is published atomically or not at all.
+ */
+export interface FsEditRequest extends FsEditStep {
+  /** Replacements applied after the primary one, each against the text the previous step produced. */
+  then?: readonly FsEditStep[] | undefined
 }
 
 /** Outcome of a literal edit. */

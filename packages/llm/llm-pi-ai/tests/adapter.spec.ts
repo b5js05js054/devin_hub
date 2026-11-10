@@ -124,6 +124,20 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('merges per-call resolved headers over profile headers with attribution winning', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url, headers: { 'x-a': 'profile', 'x-b': 'profile' } } }),
+      resolveApiKey: () => Promise.resolve('test-key'),
+      auth: memoryAuth(),
+      resolveHeaders: options => ({ 'x-a': `call-${options.model}`, 'User-Agent': 'wrong' }),
+    })
+    for await (const chunk of adapter.stream({ provider: 'deepseek', model: 'deepseek-flash', messages: [] })) void chunk
+    expect(server.headers[0]?.['x-a']).toBe('call-deepseek-flash')
+    expect(server.headers[0]?.['x-b']).toBe('profile')
+    expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

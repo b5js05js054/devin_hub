@@ -1,7 +1,8 @@
 /** Desktop resource locations and signing-aware verification for the shared runtime builder. */
 
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { preparePrimaryRuntime as preparePayload, smokePrimaryRuntime as smokePayload } from '../../../scripts/primary-runtime/prepare.ts'
 import { parsePrimaryRuntime, workspaceDependencyPaths } from '../../../packages/skill/tool-workspace-dependencies/src/index.ts'
 import { resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
@@ -32,4 +33,13 @@ export function smokePrimaryRuntime(root: string): void {
   smokePayload(root, scrubWindowsSigningEnvironment(process.env))
 }
 
-if (import.meta.main) await preparePrimaryRuntime()
+/**
+ * Detect a direct script launch where `import.meta.main` is unavailable (Node 22, tsx).
+ * @returns Whether the process entry module is this file.
+ */
+function isStartedAsScript(): boolean {
+  const entry = process.argv[1]
+  return entry !== undefined && pathToFileURL(resolve(entry)).href === import.meta.url
+}
+
+if (import.meta.main || isStartedAsScript()) await preparePrimaryRuntime()

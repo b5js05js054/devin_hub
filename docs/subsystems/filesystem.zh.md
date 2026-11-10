@@ -151,14 +151,25 @@ interface FsWriteOutcome {
 `editText` 是提供方级别的变更操作，而非在别处组合的 `read` 加 `write`。带守卫时，它在字面匹配之前先验证预期版本（因此对陈旧内容的编辑报 `FS_STALE_VERSION`，而非对更新内容的匹配失败）；不带守卫时，它编辑当前内容。无论哪种路径，它都应用替换并原子写入——将匹配、行尾处理、陈旧检查和原子替换保持在一个变更临界区内——目标缺失时两条路径都报 `FS_STALE_VERSION`。
 
 ```ts type-equiv
-/** A literal-replacement edit request. */
-interface FsEditRequest {
+/** One literal replacement inside an {@link FsEditRequest}. */
+interface FsEditStep {
   /** Literal non-empty text to replace. Must match exactly (after line-ending normalization). */
   oldString: string
   /** Literal replacement text. An empty string deletes the matched text. */
   newString: string
   /** Replace every match instead of requiring exactly one. */
   replaceAll: boolean
+}
+```
+
+```ts type-equiv
+/**
+ * A literal-replacement edit request. `then` lists further replacements applied in order to the
+ * result of the previous one; the whole batch is published atomically or not at all.
+ */
+interface FsEditRequest extends FsEditStep {
+  /** Replacements applied after the primary one, each against the text the previous step produced. */
+  then?: readonly FsEditStep[] | undefined
 }
 ```
 
@@ -443,6 +454,36 @@ abstract listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]>
  * @returns the outcome, including the version the write produced.
  */
 abstract writeText( target: FsTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsWriteOutcome>
+
+/**
+ * Create one directory whose parent already exists. Providers that cannot
+ * create directories keep this default refusal.
+ * @param target - the resolved, absent directory target.
+ * @param signal - aborts before the directory is created.
+ * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+ * @throws FsError `FS_IO_ERROR` when the target exists or the provider lacks support.
+ */
+makeDirectory(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>
+
+/**
+ * Move a file or directory to an absent path. Providers that cannot rename keep this default refusal.
+ * @param from - the resolved existing source.
+ * @param to - the resolved destination, which must not exist.
+ * @param signal - aborts before the move.
+ * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+ * @throws FsError `FS_IO_ERROR` when the destination exists or the provider lacks support.
+ */
+rename(from: FsTarget, to: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>
+
+/**
+ * Move a file or directory to the host's recycle bin or trash. Providers
+ * without a trash keep this default refusal rather than deleting permanently.
+ * @param target - the resolved existing entry.
+ * @param signal - aborts the trash command.
+ * @param sandboxPolicy - the per-call mode and workspace root a sandboxing backend fences by.
+ * @throws FsError `FS_IO_ERROR` when the provider has no trash.
+ */
+trash(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void>
 
 /**
  * Atomically edit literal text. When supplied, the version guard is checked

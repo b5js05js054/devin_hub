@@ -3,18 +3,18 @@
  * {@link LspError} taxonomy and the {@link LspProviderId} brand factory are runtime and live in
  * `index.ts`. Positions and ranges are zero-based UTF-16, matching the protocol; the model-facing
  * tool owns the one-based cursor convention. The seam exposes no protocol types, process or document
- * controls, or generic JSON-RPC escape hatch — only the four semantic operations.
+ * controls, or generic JSON-RPC escape hatch — only the six semantic operations.
  * @module @deepseek-ai/dsh-lsp/types
  */
 
 import type { LspProviderId } from './brand.ts'
 
 /**
- * The four semantic queries the seam and model expose. A closed union: adding an operation is a
- * compile-enforced change across the seam, providers, and the tool. Symbols and call hierarchy are
- * not operations here; they need different schemas.
+ * The six semantic queries the seam and model expose. A closed union: adding an operation is a
+ * compile-enforced change across the seam, providers, and the tool. `documentSymbol` and
+ * `diagnostics` take no cursor position; call hierarchy is not an operation here.
  */
-export type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover'
+export type LspOperation = 'goToDefinition' | 'findReferences' | 'goToImplementation' | 'hover' | 'documentSymbol' | 'diagnostics'
 
 /** A zero-based UTF-16 cursor coordinate, matching the LSP wire convention. */
 export interface LspPosition {
@@ -72,6 +72,34 @@ export interface LspHover {
   readonly range?: LspRange
 }
 
+/** One symbol of a document outline; `depth` is the nesting level (0 = top level). */
+export interface LspSymbol {
+  /** The symbol name. */
+  readonly name: string
+  /** The LSP `SymbolKind` name (e.g. `Class`, `Method`), or `Unknown`. */
+  readonly kind: string
+  /** The symbol's full range. */
+  readonly range: LspRange
+  /** Nesting level in the outline. */
+  readonly depth: number
+  /** Extra detail such as a signature, when the server supplied one. */
+  readonly detail?: string
+}
+
+/** Severity of an {@link LspDiagnostic}. */
+export type LspSeverity = 'error' | 'warning' | 'information' | 'hint'
+
+/** One server-reported problem in a document. */
+export interface LspDiagnostic {
+  readonly range: LspRange
+  readonly severity: LspSeverity
+  readonly message: string
+  /** The reporting tool (e.g. `ts`), when supplied. */
+  readonly source?: string
+  /** The diagnostic code, stringified, when supplied. */
+  readonly code?: string
+}
+
 /**
  * The closed result union. Navigation operations (`goToDefinition`, `findReferences`,
  * `goToImplementation`) normalize to `locations`; `hover` normalizes to content or `null`.
@@ -85,6 +113,8 @@ export interface LspHover {
 export type LspQueryResult =
   | { readonly kind: 'locations'; readonly locations: readonly LspLocation[]; readonly resolvedWorkspaceUri: string }
   | { readonly kind: 'hover'; readonly hover: LspHover | null }
+  | { readonly kind: 'symbols'; readonly symbols: readonly LspSymbol[] }
+  | { readonly kind: 'diagnostics'; readonly diagnostics: readonly LspDiagnostic[] }
 
 /**
  * A language-server backend registered on `ctx.lsp`. Each provider owns a stable {@link
@@ -108,7 +138,7 @@ export interface LspProvider {
 
 /**
  * The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query
- * execution; exposes exactly the four operations and no protocol escape hatch.
+ * execution; exposes exactly the six operations and no protocol escape hatch.
  */
 export interface LspService {
   /**

@@ -44,6 +44,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly sessionId: SessionId
       readonly activity: readonly SessionActivity[]
     }
+    /** The Session is loaded in the Host process and holds its write handle, so deletion was refused. */
+    'workspace/session-loaded': { readonly sessionId: SessionId }
     /** The Session or its anchor is not in the Workspace's manual order. */
     'workspace/move-invalid': {
       readonly workspaceId: WorkspaceId
@@ -127,6 +129,17 @@ export interface WorkspaceArchiveSessionRequest {
 /** Session requested for restoration from the archived Session list. */
 export interface WorkspaceUnarchiveSessionRequest {
   readonly sessionId: SessionId
+}
+
+/** Session requested for permanent deletion. */
+export interface WorkspaceDeleteSessionRequest {
+  readonly sessionId: SessionId
+}
+
+/** Outcome of a permanent Session deletion. */
+export interface WorkspaceDeleteSessionValue {
+  /** `false` when the Session was already gone. */
+  readonly deleted: boolean
 }
 
 /** Complete archived Session set after a mutation. */

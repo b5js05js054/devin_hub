@@ -108,6 +108,19 @@ export class SandboxedFileSystem extends LocalFileSystem {
     return super.editText(await this.checkedTarget(target, sandboxPolicy), edit, expected, signal)
   }
 
+  override async makeDirectory(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    return super.makeDirectory(await this.checkedTarget(target, sandboxPolicy), signal)
+  }
+
+  override async rename(from: FsTarget, to: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    const checkedFrom = await this.checkedTarget(from, sandboxPolicy)
+    return super.rename(checkedFrom, await this.checkedTarget(to, sandboxPolicy), signal)
+  }
+
+  override async trash(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    return super.trash(await this.checkedTarget(target, sandboxPolicy), signal)
+  }
+
   /**
    * Enforce the per-call policy against `target` and return the EXACT target the
    * mutation must use, so the checked identity is the mutated one (no

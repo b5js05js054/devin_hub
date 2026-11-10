@@ -99,7 +99,8 @@ class FakeFs extends FileSystem {
     this.throwIfArmed()
     this.editIntents.push(expected)
     const content = this.files.get(target.targetKey) ?? ''
-    const after = content.split(edit.oldString).join(edit.newString)
+    let after = content.split(edit.oldString).join(edit.newString)
+    for (const step of edit.then ?? []) after = after.split(step.oldString).join(step.newString)
     this.files.set(target.targetKey, after)
     return { version: FsVersion('v3'), before: content, after }
   }
@@ -465,7 +466,7 @@ describe('edit tool', () => {
     const result = await call(ctx, 'edit', { file_path: 'a.txt', old_string: 'a', new_string: 'b' }, { session })
     if (result.isError) throw new Error('expected edit success')
     expect(result.value).toEqual({ path: '/abs/a.txt', before: 'a', after: 'b' })
-    expect(text(result)).toBe('The file /abs/a.txt has been updated successfully.')
+    expect(text(result)).toBe('The file /abs/a.txt has been updated successfully.\nSnippet of the edited region (line<TAB>text):\n1\tb')
   })
 
   it('formats the replace_all success message distinctly', async () => {
@@ -474,7 +475,44 @@ describe('edit tool', () => {
     fs.files.set('key:a.txt', 'a a a')
     await call(ctx, 'read', { file_path: 'a.txt' }, { session })
     const result = await call(ctx, 'edit', { file_path: 'a.txt', old_string: 'a', new_string: 'b', replace_all: true }, { session })
-    expect(text(result)).toBe('The file /abs/a.txt has been updated. All occurrences were successfully replaced.')
+    expect(text(result)).toBe('The file /abs/a.txt has been updated. All occurrences were successfully replaced.\nSnippet of the edited region (line<TAB>text):\n1\tb b b')
+  })
+
+  it('shows numbered context lines around a mid-file edit', async () => {
+    const { ctx, fs } = await setup()
+    const session = { header: {} }
+    fs.files.set('key:a.txt', ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8', 'l9'].join('\n'))
+    await call(ctx, 'read', { file_path: 'a.txt' }, { session })
+    const result = await call(ctx, 'edit', { file_path: 'a.txt', old_string: 'l5', new_string: 'FIVE' }, { session })
+    expect(text(result)).toContain('2\tl2\n3\tl3\n4\tl4\n5\tFIVE\n6\tl6\n7\tl7\n8\tl8')
+    expect(text(result)).not.toContain('1\tl1')
+    expect(text(result)).not.toContain('9\tl9')
+  })
+
+  it('applies more_edits in order within one call', async () => {
+    const { ctx, fs } = await setup()
+    const session = { header: {} }
+    fs.files.set('key:a.txt', 'one two three')
+    await call(ctx, 'read', { file_path: 'a.txt' }, { session })
+    const result = await call(ctx, 'edit', {
+      file_path: 'a.txt', old_string: 'one', new_string: '1',
+      more_edits: [{ old_string: 'two', new_string: '2' }, { old_string: '2', new_string: 'II' }],
+    }, { session })
+    expect(result.isError).toBe(false)
+    expect(fs.files.get('key:a.txt')).toBe('1 II three')
+  })
+
+  it('rejects an identical pair inside more_edits and names its index', async () => {
+    const { ctx, fs } = await setup()
+    const session = { header: {} }
+    fs.files.set('key:a.txt', 'a b')
+    await call(ctx, 'read', { file_path: 'a.txt' }, { session })
+    const result = await call(ctx, 'edit', {
+      file_path: 'a.txt', old_string: 'a', new_string: 'x', more_edits: [{ old_string: 'b', new_string: 'b' }],
+    }, { session })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('more_edits[0]')
+    expect(fs.files.get('key:a.txt')).toBe('a b')
   })
 
   it('rejects identical old/new strings', async () => {

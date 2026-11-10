@@ -133,6 +133,7 @@ async function bench() {
     insertBefore: vi.fn(async () => undefined),
     archiveSession: vi.fn(async () => undefined),
     unarchiveSession: vi.fn(async () => undefined),
+    deleteSession: vi.fn(async () => undefined),
     pinSession,
     unpinSession,
     insertSessionBefore: vi.fn(async () => ({})),

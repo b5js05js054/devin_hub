@@ -18,7 +18,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { changesReviewAddress } from '../changes.ts'
+import { changesDiffUrl, changesReviewAddress } from '../changes.ts'
 import { ChangesDiffStore } from './changes-diff.ts'
 import { ChangesSummaryStore } from './changes-summary.ts'
 import { PresentedOpenController } from './present-open.ts'
@@ -64,8 +64,16 @@ export function apply(ctx: ClientContext): void {
       name: 'conversation.chat.turnTail',
       id: '@deepseek-ai/dsh-client-ui-deliverables',
       locale: NS,
-      children: { 'deliverables.file.actions': { kind: 'list', scope: 'session' } },
+      children: {
+        'deliverables.file.actions': { kind: 'list', scope: 'session' },
+        'deliverables.changes.actions': { kind: 'list', scope: 'session' },
+      },
       inject: (): DeliverablesInjected => ({
+        readChangesDiff: async (sessionId, seq, index) => {
+          await diffs.load(sessionId, seq, index)
+          const state = diffs.state.getSnapshot()[changesDiffUrl(sessionId, seq, index)]
+          return typeof state === 'object' ? state : undefined
+        },
         hooks: { changesDiff: diffs.state, presentedOpen: opener.state, presentedHost: opener.host, changesSummary: summaries.state,
           showCodeDiff: ctx.configForms.developerTools.enabled },
         loadChangesDiff: (sessionId, seq, index) => diffs.load(sessionId, seq, index),

@@ -31,6 +31,8 @@ export { canonicalizeWorkspace, readHostSource } from './host.ts'
 export { encodeMessage, MessageDecoder } from './framing.ts'
 export {
   negotiatePositionEncoding,
+  normalizeDiagnostics,
+  normalizeDocumentSymbols,
   normalizeHover,
   normalizeLocations,
   requestMethod,

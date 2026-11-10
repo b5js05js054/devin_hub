@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path'
 import {
   DEFAULT_MAX_LOCATIONS,
   DEFAULT_MAX_RESULT_CHARS,
+  formatDiagnostics,
+  formatSymbols,
   formatHover,
   formatLocations,
   LSP_OPERATIONS,
@@ -21,12 +23,33 @@ function loc(uri: string, line: number, character = 0): LspLocation {
 }
 
 describe('parseLspArgs', () => {
-  it('accepts the four operations and converts one-based to zero-based', () => {
-    for (const operation of LSP_OPERATIONS) {
+  it('accepts the position operations and converts one-based to zero-based', () => {
+    for (const operation of LSP_OPERATIONS.filter(op => op !== 'documentSymbol' && op !== 'diagnostics')) {
       const input = parseLspArgs({ operation, file_path: 'a.ts', line: 3, character: 5 })
       expect(input.operation).toBe(operation)
       expect(input.position).toEqual({ line: 2, character: 4 })
     }
+  })
+
+  it('requires a cursor for position operations but not for whole-file ones', () => {
+    expect(() => parseLspArgs({ operation: 'hover', file_path: 'a.ts' })).toThrow('line must be a positive integer')
+    for (const operation of ['documentSymbol', 'diagnostics']) {
+      expect(parseLspArgs({ operation, file_path: 'a.ts' }).operation).toBe(operation)
+    }
+  })
+
+  it('formats symbols as an indented outline and diagnostics as rows', () => {
+    const range = { start: { line: 4, character: 2 }, end: { line: 6, character: 0 } }
+    expect(formatSymbols([
+      { name: 'Foo', kind: 'Class', range, depth: 0 },
+      { name: 'bar', kind: 'Method', range, depth: 1, detail: '(): void' },
+    ], 1000)).toBe('Class Foo (line 5)\n  Method bar (): void (line 5)')
+    expect(formatSymbols([], 1000)).toBe('No symbols.')
+    expect(formatDiagnostics([
+      { range, severity: 'error', message: 'bad', source: 'ts', code: '2304' },
+      { range, severity: 'warning', message: 'meh' },
+    ], 1000)).toBe('5:3 error [ts 2304] bad\n5:3 warning meh')
+    expect(formatDiagnostics([], 1000)).toBe('No diagnostics.')
   })
 
   it('rejects an unknown operation', () => {

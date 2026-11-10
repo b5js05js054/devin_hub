@@ -5,6 +5,7 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
   WorkspaceActiveSessionError,
   WorkspaceArchivedSessionPinError,
+  WorkspaceLoadedSessionError,
   WorkspaceId,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
@@ -18,6 +19,8 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceCreateValue,
   WorkspaceDeleteRequest,
+  WorkspaceDeleteSessionRequest,
+  WorkspaceDeleteSessionValue,
   WorkspaceDeleteValue,
   WorkspaceInsertBeforeRequest,
   WorkspaceInsertSessionBeforeRequest,
@@ -180,6 +183,24 @@ export class WorkspaceCommands {
       throw error
     }
     return { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] }
+  }
+
+  /**
+   * Permanently delete one stored Session. A Session loaded in this process
+   * is refused as `workspace/session-loaded`; a missing one resolves with
+   * `deleted: false`.
+   * @param request - Session identity to delete.
+   * @returns whether a stored Session was removed.
+   */
+  async deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue> {
+    try {
+      return { deleted: await this.ctx.workspaceRegistry.deleteSession(request.sessionId) }
+    } catch (error) {
+      if (error instanceof WorkspaceLoadedSessionError) {
+        throw new RemoteError('workspace/session-loaded', error.message, { sessionId: request.sessionId }, { cause: error })
+      }
+      throw error
+    }
   }
 
   /**

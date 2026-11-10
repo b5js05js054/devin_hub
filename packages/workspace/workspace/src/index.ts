@@ -55,6 +55,15 @@ export class WorkspaceUnknownSessionError extends Error {
   }
 }
 
+/** A deleteSession request named a session loaded in this process; it must be released first. */
+export class WorkspaceLoadedSessionError extends Error {
+  /** @param sessionId - The loaded session id. */
+  constructor(readonly sessionId: SessionId) {
+    super(`cannot delete session '${sessionId}': the session is loaded in this process`)
+    this.name = 'WorkspaceLoadedSessionError'
+  }
+}
+
 /**
  * An archiveSession request named a session that at least one
  * `workspace/session-activity` listener reported active. Nothing was written;
@@ -383,6 +392,37 @@ export class WorkspaceRegistry extends Service {
         pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
       })
       if (options.stopActivity === true) await this.stopSessionActivity(sessionId)
+    })
+  }
+
+  /**
+   * Permanently delete one stored session: its durable log, its workspace
+   * membership, and its archive and pin entries. A session loaded in this
+   * process holds the write handle, so it is refused rather than torn down.
+   * @param sessionId - The session to delete.
+   * @returns `true` when a stored session was removed, `false` when none existed.
+   * @throws {WorkspaceLoadedSessionError} when the session is loaded in this process.
+   */
+  deleteSession(sessionId: SessionId): Promise<boolean> {
+    return this.enqueueOperation(async () => {
+      if (this.ctx.get('sessions')?.get(sessionId) !== undefined) {
+        throw new WorkspaceLoadedSessionError(sessionId)
+      }
+      const removed = await this.ctx.sessionPersistence.delete(sessionId)
+      for (const entity of this.entities.values()) await entity.detachSession(sessionId)
+      const state = this.requireState()
+      if (state.archivedSessionIds.includes(sessionId) || state.pinnedSessionIds.includes(sessionId)) {
+        await this.setState({
+          ...state,
+          archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
+          pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
+        })
+      }
+      this.headers.delete(sessionId)
+      this.sessionPaths.delete(sessionId)
+      this.missingSessionPaths.delete(sessionId)
+      this.invalidSessionPaths.delete(sessionId)
+      return removed
     })
   }
 

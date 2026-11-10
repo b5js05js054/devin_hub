@@ -313,3 +313,46 @@ export async function revealNativePath(
   }
   throw new Error(`native file manager is unsupported on ${platform}`)
 }
+
+/** Quote one value as a PowerShell single-quoted literal, doubling every quote character PowerShell recognizes. */
+function powershellLiteral(value: string): string {
+  return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, quote => quote + quote)}'`
+}
+
+/**
+ * Move one file or directory to the operating system's recycle bin or trash.
+ * @param path - absolute path already authorized by the caller; directories move with their contents.
+ * @param signal - caller lifetime; abort terminates the native command.
+ * @param internals - platform and command runner for adapter tests.
+ * @returns after the system reports the entry moved; rejects where no trash command exists.
+ */
+export async function trashNativePath(
+  path: string, signal: AbortSignal, internals: PathOpenerInternals = {},
+): Promise<void> {
+  signal.throwIfAborted()
+  const platform = internals.platform ?? process.platform
+  const run = internals.run ?? runNativeCommand
+  if (platform === 'win32') {
+    const literal = powershellLiteral(path)
+    const script = `Add-Type -AssemblyName Microsoft.VisualBasic; $p = ${literal}; `
+      + 'if (Test-Path -LiteralPath $p -PathType Container) '
+      + '{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, \'OnlyErrorDialogs\', \'SendToRecycleBin\') } '
+      + 'else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, \'OnlyErrorDialogs\', \'SendToRecycleBin\') }'
+    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], signal, 'hidden')
+    return
+  }
+  if (platform === 'darwin') {
+    await run('osascript', [
+      '-e', 'on run argv',
+      '-e', 'tell application "Finder" to delete (POSIX file (item 1 of argv))',
+      '-e', 'end run',
+      path,
+    ], signal, 'hidden')
+    return
+  }
+  if (platform === 'linux') {
+    await run('gio', ['trash', '--', path], signal, 'hidden')
+    return
+  }
+  throw new Error(`native trash is unsupported on ${platform}`)
+}

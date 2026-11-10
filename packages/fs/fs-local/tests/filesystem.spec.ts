@@ -655,6 +655,28 @@ describe('writeText', () => {
 })
 
 describe('editText', () => {
+  it('applies chained steps in order and publishes them together', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one two')
+    const target = await fs.resolve('a.txt')
+    const outcome = await fs.editText(target, {
+      oldString: 'one', newString: '1', replaceAll: false,
+      then: [{ oldString: 'two', newString: '2', replaceAll: false }],
+    })
+    expect(outcome.before).toBe('one two')
+    expect(outcome.after).toBe('1 2')
+    expect(await readFile(join(dir, 'a.txt'), 'utf8')).toBe('1 2')
+  })
+
+  it('writes nothing when a later step fails', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one two')
+    const target = await fs.resolve('a.txt')
+    await expect(fs.editText(target, {
+      oldString: 'one', newString: '1', replaceAll: false,
+      then: [{ oldString: 'missing', newString: 'x', replaceAll: false }],
+    })).rejects.toMatchObject({ code: 'FS_EDIT_NOT_FOUND' })
+    expect(await readFile(join(dir, 'a.txt'), 'utf8')).toBe('one two')
+  })
+
   it('applies a literal edit at the matching version', async () => {
     await writeFile(join(dir, 'a.txt'), 'hello world')
     const target = await fs.resolve('a.txt')
@@ -833,5 +855,26 @@ describe('HMR / disposal', () => {
     expect(local.fs).toBeDefined()
     await localFiber.dispose()
     expect(local.fs).toBeUndefined()
+  })
+})
+
+
+describe('makeDirectory and rename', () => {
+  it('creates a directory under an existing parent and refuses an existing path', async () => {
+    const target = await fs.resolve('made')
+    await fs.makeDirectory(target)
+    expect((await stat(join(dir, 'made'))).isDirectory()).toBe(true)
+    await expect(fs.makeDirectory(target)).rejects.toMatchObject({ code: 'FS_IO_ERROR' })
+    await expect(fs.makeDirectory(await fs.resolve('missing/child'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
+
+  it('renames a file and never replaces an existing destination', async () => {
+    await writeFile(join(dir, 'a.txt'), 'a')
+    await writeFile(join(dir, 'b.txt'), 'b')
+    await expect(fs.rename(await fs.resolve('a.txt'), await fs.resolve('b.txt'))).rejects.toMatchObject({ code: 'FS_IO_ERROR' })
+    expect(await readFile(join(dir, 'b.txt'), 'utf8')).toBe('b')
+    await fs.rename(await fs.resolve('a.txt'), await fs.resolve('c.txt'))
+    expect(await readFile(join(dir, 'c.txt'), 'utf8')).toBe('a')
+    await expect(fs.rename(await fs.resolve('a.txt'), await fs.resolve('d.txt'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
   })
 })

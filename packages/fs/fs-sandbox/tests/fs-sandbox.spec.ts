@@ -241,3 +241,30 @@ describe('FsError identity', () => {
     expect((error as FsError).code).toBe('FS_SANDBOX_DENIED')
   })
 })
+
+
+describe('directory and rename mutations', () => {
+  it('denies makeDirectory, rename and trash under read-only', async () => {
+    await boot('read-only')
+    await writeFile(join(workspace, 'a.txt'), 'a')
+    await expect(fs.makeDirectory(await target(join(workspace, 'd')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.rename(await target(join(workspace, 'a.txt')), await target(join(workspace, 'b.txt')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.trash(await target(join(workspace, 'a.txt')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(workspace, 'd'))).toBe(false)
+    expect(existsSync(join(workspace, 'a.txt'))).toBe(true)
+  })
+
+  it('allows makeDirectory and rename inside the workspace but denies a destination outside it', async () => {
+    await boot('workspace-write')
+    await writeFile(join(workspace, 'a.txt'), 'a')
+    await fs.makeDirectory(await target(join(workspace, 'd')))
+    expect(existsSync(join(workspace, 'd'))).toBe(true)
+    await fs.rename(await target(join(workspace, 'a.txt')), await target(join(workspace, 'b.txt')))
+    expect(existsSync(join(workspace, 'b.txt'))).toBe(true)
+    await expect(fs.rename(await target(join(workspace, 'b.txt')), await target(join(outside, 'b.txt')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.makeDirectory(await target(join(outside, 'd')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(workspace, 'b.txt'))).toBe(true)
+    expect(existsSync(join(outside, 'b.txt'))).toBe(false)
+    expect(existsSync(join(outside, 'd'))).toBe(false)
+  })
+})

@@ -12,11 +12,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import { PluginArtworkTerminal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { TerminalGuide, type TerminalGuideInjected } from './TerminalGuide.tsx'
-import { LazyTerminalBody } from './LazyTerminalBody.tsx'
+import { LazyEmbeddedTerminal, LazyTerminalBody } from './LazyTerminalBody.tsx'
 import { TerminalTitle } from './TerminalTitle.tsx'
 // import { TerminalRecovery, type TerminalRecoveryInjected } from './TerminalRecovery.tsx'
 // import { TerminalCleanup, type TerminalCleanupInjected } from './TerminalCleanup.tsx'
-import type { TerminalBodyInjected, TerminalInjected } from './face.ts'
+import type { EmbeddedTerminalInjected, TerminalBodyInjected, TerminalInjected } from './face.ts'
+
+export type { EmbeddedTerminalInjected } from './face.ts'
 import { en, zh } from './locales.ts'
 
 /** Services needed by the terminal's two sidebar seats. */
@@ -31,10 +33,10 @@ export function apply(ctx: Context): void {
   // const recovered = new Map<SessionId, Promise<void>>()
   // ctx.effect(() => () => { disposed = true; recovered.clear() }, 'ui-sidebar-terminal.lifetime')
   ctx.effect(() => {
-    const sync = (): void => { ctx.webTerminals.retainTabs(ctx.sidebarRight.openTabs.getSnapshot().filter(tab => tab.kind === 'terminal')) }
+    const sync = (): void => { ctx.webTerminals.retainTabs(ctx.sidebarRight.openTabs.getSnapshot().filter(tab => tab.kind === 'terminal'), 'sidebar') }
     const unsubscribe = ctx.sidebarRight.openTabs.subscribe(sync)
     sync()
-    return () => { unsubscribe(); ctx.webTerminals.retainTabs([]) }
+    return () => { unsubscribe(); ctx.webTerminals.retainTabs([], 'sidebar') }
   }, 'ui-sidebar-terminal.window-holds')
   const target = (sessionId: SessionId, key: string): SidebarRightTabParamsMap['terminal'] | undefined =>
     ctx.sidebarRight.tabDomain.occurrence(sessionId, { id: key as TabId }).navigation.getSnapshot().params
@@ -83,6 +85,38 @@ export function apply(ctx: Context): void {
     getSnapshot: () => ctx.theme.getTheme(),
     subscribe: listener => ctx.on('theme/change', listener),
   }
+  const held = new Map<SessionId, Map<string, string>>()
+  const embeddedId = (key: string): string => `embedded:${key}`
+  const embeddedContent = (sessionId: SessionId, key: string): string => `embedded:${sessionId}:${key}`
+  const retainEmbedded = (): void => {
+    const tabs = [...held].flatMap(([sessionId, keys]) => [...keys].map(([key, contentId]) => ({ sessionId, tabId: embeddedId(key), contentId })))
+    ctx.webTerminals.retainTabs(tabs, 'embedded')
+  }
+  const embeddedView = (sessionId: SessionId, key: string) => ctx.webTerminals.view(sessionId, embeddedId(key), embeddedContent(sessionId, key))
+  ctx.effect(() => () => { held.clear(); retainEmbedded() }, 'ui-sidebar-terminal.embedded-holds')
+  ctx.effect(() => ctx.slots.registerFactory({
+    name: 'terminal.embedded', scope: 'session', locale: namespace,
+    inject: (sessionId): EmbeddedTerminalInjected => ({
+      view: key => embeddedView(sessionId, key),
+      keyedHooks: { terminal: key => embeddedView(sessionId, key).state },
+      hold: (key) => {
+        let keys = held.get(sessionId)
+        if (keys === undefined) { keys = new Map(); held.set(sessionId, keys) }
+        keys.set(key, embeddedContent(sessionId, key))
+        retainEmbedded()
+        return () => {
+          held.get(sessionId)?.delete(key)
+          retainEmbedded()
+        }
+      },
+      close: (key) => {
+        held.get(sessionId)?.delete(key)
+        ctx.webTerminals.close(sessionId, embeddedId(key), embeddedContent(sessionId, key), undefined)
+        retainEmbedded()
+      },
+      hooks: { theme },
+    }),
+  }, LazyEmbeddedTerminal), 'ui-sidebar-terminal.embedded')
   ctx.effect(() => ctx.slots.inject('sidebar.right.tab.guide.entry', () => ctx.slots.register({
     name: 'sidebar.right.tab.guide.entry', key: id, locale: namespace,
     inject: (sessionId): TerminalGuideInjected => ({

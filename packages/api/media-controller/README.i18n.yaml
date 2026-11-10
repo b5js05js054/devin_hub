@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/api/media-controller/README.md
+/:
+  en: acb81e0e67bdf463
+  zh: 1925491633fcf784
+/deepseek-ai-dsh-api-media-controller:
+  en: f758769761a49f92
+  zh: 859dfc697cee4266
+/deepseek-ai-dsh-api-media-controller/summary:
+  en: 024c71f0d2d51521
+  zh: 84c4fa2f4095f933
+/deepseek-ai-dsh-api-media-controller/table-of-contents:
+  en: 2fee9973f19f9401
+  zh: be4649a45bb273d9
+/deepseek-ai-dsh-api-media-controller/use-this-package:
+  en: a9b39f915a407d5e
+  zh: d2005332dd288755
+/deepseek-ai-dsh-api-media-controller/understand-the-implementation:
+  en: 87a716b161ca0587
+  zh: 0378f6db7082ce0d
+/deepseek-ai-dsh-api-media-controller/model-experience:
+  en: e0a1db22670aec59
+  zh: 540f9be81042981b
+/deepseek-ai-dsh-api-media-controller/model-experience/kv-cache-effect:
+  en: ca3015e252db0114
+  zh: ebca9253cf15e8e9
+/deepseek-ai-dsh-api-media-controller/known-limitations-and-deferred-work:
+  en: fb7eb072d4fe91a5
+  zh: d983905c649e9e7f

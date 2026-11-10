@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "IDE workspace",
+    "description": "A three-column workspace: file tree, code editor with reviewable Agent edits, and the Agent conversation."
+  }
+}

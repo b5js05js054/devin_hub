@@ -59,6 +59,7 @@ function openProps(controller = new PresentedOpenController(), summaries = new C
     openPresented: vi.fn((...args: Parameters<PresentedOpenController['open']>) => controller.open(...args)),
     openChanged: vi.fn((...args: Parameters<PresentedOpenController['openChanged']>) => controller.openChanged(...args)),
     openChangesReview: vi.fn<DeliverablesInjected['openChangesReview']>(),
+    readChangesDiff: vi.fn<DeliverablesInjected['readChangesDiff']>().mockResolvedValue(undefined),
     usePresentedOpen: <T,>(select: (state: ReturnType<typeof controller.state.getSnapshot>) => T): T =>
       select(controller.state.getSnapshot()),
   }

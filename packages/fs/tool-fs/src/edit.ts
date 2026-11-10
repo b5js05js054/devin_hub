@@ -9,11 +9,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DiffCallView, DiffResultView, ToolResult } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
+import type { FsEditStep } from '@deepseek-ai/dsh-fs'
 import { computeHunkDiffs, diffsFromMeta } from './diff.ts'
 import { remediateFsError } from './error.ts'
 import { mutationResult } from './mutation-result.ts'
 import { sessionResolveOptions } from './session-cwd.ts'
 import type { FsSandboxController } from './sandbox.ts'
+
+/** One follow-up replacement of a batch, as the model supplies it. */
+interface MoreEdit {
+  old_string: string
+  new_string: string
+  replace_all?: boolean
+}
 
 /** Validated `edit` arguments after defaulting. */
 interface EditInput {
@@ -21,6 +29,7 @@ interface EditInput {
   oldString: string
   newString: string
   replaceAll: boolean
+  then: FsEditStep[]
 }
 
 /**
@@ -33,26 +42,32 @@ interface EditToolArgs {
   old_string: string
   new_string: string
   replace_all?: boolean
+  more_edits?: MoreEdit[]
   sandbox_permissions?: string
   justification?: string
 }
 
 /**
  * Validate value constraints the schema DSL can't express: a non-blank
- * `file_path`, a non-empty `old_string`, and `old_string !== new_string`
- * (an equal pair would be a guaranteed no-op edit).
+ * `file_path`, and for every replacement (the primary one and each of
+ * `more_edits`) a non-empty `old_string` that differs from `new_string`.
  * @param args - the schema-validated raw tool arguments.
- * @returns the camelCased input with `replace_all` defaulted to false.
+ * @returns the camelCased input with `replace_all` defaulted to false and the follow-up steps in order.
  */
-export function parseEditArgs(args: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }): EditInput {
+export function parseEditArgs(args: { file_path: string; old_string: string; new_string: string; replace_all?: boolean; more_edits?: MoreEdit[] }): EditInput {
   if (args.file_path.trim().length === 0) throw new Error('file_path must be a non-empty string')
-  if (args.old_string.length === 0) throw new Error('old_string must be a non-empty string')
-  if (args.old_string === args.new_string) throw new Error('old_string and new_string must differ')
+  const steps = [args, ...args.more_edits ?? []]
+  steps.forEach((step, index) => {
+    const label = index === 0 ? '' : ` (more_edits[${index - 1}])`
+    if (step.old_string.length === 0) throw new Error(`old_string must be a non-empty string${label}`)
+    if (step.old_string === step.new_string) throw new Error(`old_string and new_string must differ${label}`)
+  })
   return {
     filePath: args.file_path,
     oldString: args.old_string,
     newString: args.new_string,
     replaceAll: args.replace_all ?? false,
+    then: (args.more_edits ?? []).map(step => ({ oldString: step.old_string, newString: step.new_string, replaceAll: step.replace_all ?? false })),
   }
 }
 
@@ -66,6 +81,34 @@ export function formatEditOutput(displayPath: string, replaceAll: boolean): stri
   return replaceAll
     ? `The file ${displayPath} has been updated. All occurrences were successfully replaced.`
     : `The file ${displayPath} has been updated successfully.`
+}
+
+/** Lines of unchanged context shown around the edited region. */
+const SNIPPET_CONTEXT = 3
+/** Cap on snippet lines so a large replacement does not echo the whole block. */
+const SNIPPET_MAX_LINES = 30
+
+/**
+ * Show the edited region of the new text with line numbers, so the model can verify the edit without re-reading.
+ * @param before - the file text before the edit.
+ * @param after - the file text after the edit.
+ * @returns the numbered snippet, or an empty string when the texts do not differ.
+ */
+export function formatEditSnippet(before: string, after: string): string {
+  if (before === after) return ''
+  const max = Math.min(before.length, after.length)
+  let start = 0
+  while (start < max && before.charCodeAt(start) === after.charCodeAt(start)) start++
+  let tail = 0
+  while (tail < max - start && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++
+  const lines = after.split('\n')
+  const firstLine = after.slice(0, start).split('\n').length - 1
+  const lastLine = after.slice(0, after.length - tail).split('\n').length - 1
+  const from = Math.max(firstLine - SNIPPET_CONTEXT, 0)
+  const to = Math.min(lastLine + SNIPPET_CONTEXT, lines.length - 1)
+  const shownTo = Math.min(to, from + SNIPPET_MAX_LINES - 1)
+  const body = lines.slice(from, shownTo + 1).map((line, index) => `${from + index + 1}\t${line}`).join('\n')
+  return `${body}${shownTo < to ? '\n...' : ''}`
 }
 
 /**
@@ -94,6 +137,20 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
       old_string: { type: 'string', required: true, description: 'Literal text to replace.' },
       new_string: { type: 'string', required: true, description: 'Literal replacement text. Use an empty string to delete the match.' },
       replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false; when false, old_string must appear exactly once.' },
+      more_edits: {
+        type: 'array',
+        description: 'Further replacements in the same file, applied in order after the first one, each against the text the previous step produced. '
+          + 'All succeed or none is written.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            old_string: { type: 'string', required: true, description: 'Literal text to replace.' },
+            new_string: { type: 'string', required: true, description: 'Literal replacement text.' },
+            replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false.' },
+          },
+        },
+      },
       ...sandbox.escalationModes.length > 0 ? sandbox.schemaFields() : {},
     },
     output: {
@@ -106,10 +163,13 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
           after: { type: 'string', required: true },
         },
       },
-      render: (args, value) => [{
-        type: 'text',
-        text: formatEditOutput(value.path, args.replace_all ?? false),
-      }],
+      render: (args, value) => {
+        const snippet = formatEditSnippet(value.before, value.after)
+        return [{
+          type: 'text',
+          text: `${formatEditOutput(value.path, args.replace_all ?? false)}${snippet === '' ? '' : `\nSnippet of the edited region (line<TAB>text):\n${snippet}`}`,
+        }]
+      },
       presentationMeta: (_args, value) => ({
         path: value.path,
         diffs: computeHunkDiffs(value.path, value.before, value.after)
@@ -133,7 +193,7 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
         const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
         outcome = await ctx.fs.editText(
           target,
-          { oldString: input.oldString, newString: input.newString, replaceAll: input.replaceAll },
+          { oldString: input.oldString, newString: input.newString, replaceAll: input.replaceAll, ...input.then.length > 0 ? { then: input.then } : {} },
           intent,
           exec.signal,
           sandboxPolicy,

@@ -165,7 +165,8 @@ Factory: conversation.content [ConversationContent]
 │  ├─ conversation.input.overlay
 │  ├─ conversation.composer.dock
 │  ├─ conversation.input.left
-│  └─ conversation.input.right
+│  ├─ conversation.input.right
+│  └─ conversation.input.media
 ├─ conversation.input.dock
 │  └─ id=queue [QueueDock]
 │     └─ calls Factory: conversation.user.text

@@ -48,7 +48,7 @@ export {
   presentGrepCall,
   presentGrepResult,
 } from './grep.ts'
-export type { GrepInput, GrepToolCaps } from './grep.ts'
+export type { GrepFileCount, GrepInput, GrepOutputMode, GrepResult, GrepToolCaps } from './grep.ts'
 export {
   RAW_OUTPUT_MAX_BYTES,
   SEARCH_GRACE_MS,
@@ -62,7 +62,7 @@ export {
   toWorkdirRelative,
   trySaveFormattedResult,
 } from './search-core.ts'
-export type { GrepMatch, RipgrepRun, SearchErrorCode } from './search-core.ts'
+export type { GrepContextLine, GrepMatch, RipgrepRun, SearchErrorCode } from './search-core.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'tool-fs-search'

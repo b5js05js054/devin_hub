@@ -30,6 +30,7 @@ import {
   buildGlobCommand,
   buildGrepCommand,
   formatGrepMatches,
+  parseGrepArgs,
   parseGrepMatches,
   presentGlobCall,
   presentGlobResult,
@@ -334,41 +335,75 @@ describe('config validation', () => {
   })
 })
 
+const SEARCH_SCOPE = [
+  '--no-ignore',
+  '--hidden',
+  '--glob=!**/.git', '--glob=!**/.git/**',
+  '--glob=!**/.svn', '--glob=!**/.svn/**',
+  '--glob=!**/.hg', '--glob=!**/.hg/**',
+  '--glob=!**/.bzr', '--glob=!**/.bzr/**',
+  '--glob=!**/.jj', '--glob=!**/.jj/**',
+  '--glob=!**/.sl', '--glob=!**/.sl/**',
+  '--glob=!**/node_modules', '--glob=!**/dist', '--glob=!**/target',
+]
+
 describe('command construction (plain argv)', () => {
-  it('glob: fixed rg --files argv with the pattern and paired VCS excludes', () => {
+  it('glob: fixed rg --files argv with the pattern and the shared search scope', () => {
     expect(buildGlobCommand({ pattern: '**/*.ts' })).toEqual([
       '--files',
       '--glob=**/*.ts',
       '--sort=modified',
-      '--no-ignore',
-      '--hidden',
-      '--glob=!**/.git', '--glob=!**/.git/**',
-      '--glob=!**/.svn', '--glob=!**/.svn/**',
-      '--glob=!**/.hg', '--glob=!**/.hg/**',
-      '--glob=!**/.bzr', '--glob=!**/.bzr/**',
-      '--glob=!**/.jj', '--glob=!**/.jj/**',
-      '--glob=!**/.sl', '--glob=!**/.sl/**',
+      ...SEARCH_SCOPE,
     ])
   })
 
   it('glob: the search root rides behind -- as a plain element', () => {
-    expect(buildGlobCommand({ pattern: '*.md', path: 'docs dir' })).toEqual(['--files', '--glob=*.md', '--sort=modified', '--no-ignore', '--hidden',
-      '--glob=!**/.git', '--glob=!**/.git/**',
-      '--glob=!**/.svn', '--glob=!**/.svn/**',
-      '--glob=!**/.hg', '--glob=!**/.hg/**',
-      '--glob=!**/.bzr', '--glob=!**/.bzr/**',
-      '--glob=!**/.jj', '--glob=!**/.jj/**',
-      '--glob=!**/.sl', '--glob=!**/.sl/**',
-      '--', 'docs dir'])
+    expect(buildGlobCommand({ pattern: '*.md', path: 'docs dir' })).toEqual(['--files', '--glob=*.md', '--sort=modified', ...SEARCH_SCOPE, '--', 'docs dir'])
   })
 
-  it('grep: fixed rg --json argv with the pattern in --regexp= form', () => {
-    expect(buildGrepCommand({ pattern: 'foo.*bar' })).toEqual(['--json', '--regexp=foo.*bar'])
+  it('grep: fixed rg --json argv with the pattern in --regexp= form and the same scope as glob', () => {
+    expect(buildGrepCommand({ pattern: 'foo.*bar' })).toEqual(['--json', '--regexp=foo.*bar', ...SEARCH_SCOPE])
+  })
+
+  it('grep: ignoreCase and multiline map to rg flags only when true', () => {
+    expect(buildGrepCommand(parseGrepArgs({ pattern: 'x', ignoreCase: true, multiline: true })))
+      .toEqual(['--json', '--regexp=x', '--ignore-case', '--multiline', ...SEARCH_SCOPE])
+    expect(buildGrepCommand(parseGrepArgs({ pattern: 'x', ignoreCase: false, multiline: false })))
+      .toEqual(['--json', '--regexp=x', ...SEARCH_SCOPE])
+  })
+
+  it('grep: contextLines maps to --context and rejects out-of-range values', () => {
+    expect(buildGrepCommand(parseGrepArgs({ pattern: 'x', contextLines: 2 })))
+      .toEqual(['--json', '--regexp=x', '--context=2', ...SEARCH_SCOPE])
+    expect(buildGrepCommand(parseGrepArgs({ pattern: 'x', contextLines: 0 })))
+      .toEqual(['--json', '--regexp=x', ...SEARCH_SCOPE])
+    expect(() => parseGrepArgs({ pattern: 'x', contextLines: 11 })).toThrow('contextLines')
+    expect(() => parseGrepArgs({ pattern: 'x', contextLines: -1 })).toThrow('contextLines')
+  })
+
+  it('grep: context records attach to the nearest match as before/after', () => {
+    const rec = (type: string, n: number, text: string) => JSON.stringify({ type, data: { path: { text: 'a.ts' }, line_number: n, lines: { text: `${text}\n` } } })
+    const stdout = [rec('context', 1, 'c1'), rec('match', 2, 'm2'), rec('context', 3, 'c3'), rec('context', 9, 'c9'), rec('match', 10, 'm10')].join('\n')
+    const matches = parseGrepMatches(stdout, 1)
+    expect(matches).toEqual([
+      { path: 'a.ts', lineNumber: 2, line: 'm2', before: [{ lineNumber: 1, line: 'c1' }], after: [{ lineNumber: 3, line: 'c3' }] },
+      { path: 'a.ts', lineNumber: 10, line: 'm10', before: [{ lineNumber: 9, line: 'c9' }] },
+    ])
+    expect(parseGrepMatches(stdout).map(m => m.lineNumber)).toEqual([2, 10])
+    expect(formatGrepMatches(matches)).toBe('a.ts\nLine 1- c1\nLine 2: m2\nLine 3- c3\nLine 9- c9\nLine 10: m10')
+  })
+
+  it('grep: include arrays become repeated --glob flags', () => {
+    expect(buildGrepCommand(parseGrepArgs({ pattern: 'x', include: ['*.ts', '*.tsx'] })))
+      .toEqual(['--json', '--regexp=x', '--glob=*.ts', '--glob=*.tsx', ...SEARCH_SCOPE])
+    expect(() => parseGrepArgs({ pattern: 'x', include: [] })).toThrow('at least one glob')
+    expect(() => parseGrepArgs({ pattern: 'x', include: ['*.ts', '!*.tsx'] })).toThrow('negated patterns')
+    expect(presentGrepCall({ pattern: 'x', include: ['*.ts', '*.tsx'] }).title).toBe('Grep x (*.ts, *.tsx)')
   })
 
   it('grep: include in --glob= form, path behind --, both plain elements', () => {
     expect(buildGrepCommand({ pattern: 'x', path: '-leading-dash', include: '*.{ts,tsx}' }))
-      .toEqual(['--json', '--regexp=x', '--glob=*.{ts,tsx}', '--', '-leading-dash'])
+      .toEqual(['--json', '--regexp=x', '--glob=*.{ts,tsx}', ...SEARCH_SCOPE, '--', '-leading-dash'])
   })
 
   it.each([
@@ -382,7 +417,7 @@ describe('command construction (plain argv)', () => {
   ])('keeps %s as ONE inert argv element (no shell layer to escape)', (_label, raw) => {
     // The argv vector is handed to rg verbatim: hostile text cannot break out
     // of its argument because there is no shell between the vector and rg.
-    expect(buildGrepCommand({ pattern: raw })).toEqual(['--json', `--regexp=${raw}`])
+    expect(buildGrepCommand({ pattern: raw })).toEqual(['--json', `--regexp=${raw}`, ...SEARCH_SCOPE])
     expect(buildGlobCommand({ pattern: raw })[1]).toBe(`--glob=${raw}`)
   })
 })
@@ -414,7 +449,7 @@ describe('workdir derivation and signal forwarding', () => {
     const spec = subprocess.spawns[0]
     // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
     // preprocessor into this unconfined spawn.
-    expect(spec?.argv).toEqual([rgPath, '--no-config', '--json', '--regexp=needle'])
+    expect(spec?.argv).toEqual([rgPath, '--no-config', '--json', '--regexp=needle', ...SEARCH_SCOPE])
     expect(spec?.stdio.stdin).toBe('ignore')
     // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
     // both are the seam's diagnostic-tail shape (no spill files requested).
@@ -757,14 +792,7 @@ describe('glob results', () => {
     subprocess.handler = () => runResult('sub/a.ts\n')
     const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
     expect(result.isError).toBe(false)
-    expect(subprocess.spawns[0]?.argv).toEqual([rgPath, '--no-config', '--files', '--glob=*.ts', '--sort=modified', '--no-ignore', '--hidden',
-      '--glob=!**/.git', '--glob=!**/.git/**',
-      '--glob=!**/.svn', '--glob=!**/.svn/**',
-      '--glob=!**/.hg', '--glob=!**/.hg/**',
-      '--glob=!**/.bzr', '--glob=!**/.bzr/**',
-      '--glob=!**/.jj', '--glob=!**/.jj/**',
-      '--glob=!**/.sl', '--glob=!**/.sl/**',
-      '--', 'sub'])
+    expect(subprocess.spawns[0]?.argv).toEqual([rgPath, '--no-config', '--files', '--glob=*.ts', '--sort=modified', ...SEARCH_SCOPE, '--', 'sub'])
   })
 
   it('caps at globMaxResults and saves the FULL sorted list through spillStore', async () => {
@@ -941,6 +969,47 @@ describe('grep results', () => {
       ],
     })
     expect(text(result)).toBe('Found 3 matches\n\na.ts\nLine 3: const x = 1\nLine 9: const y = 2\n\nb.ts\nLine 1: const z = 3')
+  })
+
+  it('returns only unique paths in files output mode', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult([matchLine('a.ts', 1, 'one'), matchLine('a.ts', 2, 'two'), matchLine('b.ts', 3, 'three'), ''].join('\n'))
+    const result = await call(ctx, 'grep', { pattern: 'e', outputMode: 'files' })
+    if (result.isError) throw new Error('expected grep success')
+    expect(result.value).toEqual({ files: ['a.ts', 'b.ts'] })
+    expect(text(result)).toBe('Found 2 files with matches\n\na.ts\nb.ts')
+    expect(text(result)).not.toContain('one')
+    expect(presentGrepResult({ pattern: 'e', outputMode: 'files' }, result)).toEqual({ card: 'search', shape: 'paths', paths: ['a.ts', 'b.ts'], truncated: false, total: 2 })
+  })
+
+  it('returns per-file match counts in count output mode', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult([matchLine('a.ts', 1, 'one'), matchLine('a.ts', 2, 'two'), matchLine('b.ts', 3, 'three'), ''].join('\n'))
+    const result = await call(ctx, 'grep', { pattern: 'e', outputMode: 'count' })
+    if (result.isError) throw new Error('expected grep success')
+    expect(result.value).toEqual({ counts: [{ path: 'a.ts', count: 2 }, { path: 'b.ts', count: 1 }] })
+    expect(text(result)).toBe('Found 3 matches in 2 files\n\na.ts: 2\nb.ts: 1')
+    expect(text(result)).not.toContain('one')
+  })
+
+  it('returns empty projected values for files and count modes with no matches', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult('', { exitCode: 1, signal: null })
+    const files = await call(ctx, 'grep', { pattern: 'x', outputMode: 'files' })
+    const counts = await call(ctx, 'grep', { pattern: 'x', outputMode: 'count' })
+    expect(files).toMatchObject({ isError: false, value: { files: [] } })
+    expect(counts).toMatchObject({ isError: false, value: { counts: [] } })
+    expect(text(files)).toBe('No matches found')
+    expect(text(counts)).toBe('No matches found')
+  })
+
+  it.each(['files', 'count'] as const)('caps and spills the complete %s projection', async (outputMode) => {
+    const { ctx, subprocess, spill } = await setup({ config: { grepMaxMatches: 1 }, spill: true })
+    subprocess.handler = () => runResult([matchLine('a.ts', 1, 'one'), matchLine('a.ts', 2, 'two'), matchLine('b.ts', 3, 'three'), ''].join('\n'))
+    const result = await call(ctx, 'grep', { pattern: 'e', outputMode }, { agent: agent('/w') })
+    expect(result.isError).toBe(false)
+    expect(text(result)).toContain('Showing 1 of 2 files')
+    expect(spill?.saves[0]?.content).toBe(outputMode === 'files' ? 'a.ts\nb.ts' : 'a.ts: 2\nb.ts: 1')
   })
 
   it('reports a single match in the singular', async () => {
@@ -1193,7 +1262,7 @@ describe('presentation', () => {
     // tool's shape: each presenter narrows to its own shape and otherwise falls back.
     const pathsResult = { content: [], isError: false, meta: { shape: 'paths', paths: ['a.ts'], truncated: false, total: 1 } }
     const matchesResult = { content: [], isError: false, meta: { shape: 'matches', files: [], truncated: false, total: 0 } }
-    expect(presentGrepResult({ pattern: 'x' }, pathsResult)).toBeUndefined()
+    expect(presentGrepResult({ pattern: 'x' }, pathsResult)).toEqual({ card: 'search', shape: 'paths', paths: ['a.ts'], truncated: false, total: 1 })
     expect(presentGlobResult({ pattern: '*' }, matchesResult)).toBeUndefined()
   })
 
