@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/client-ui-agent-team/README.md
+/:
+  en: 6deb254c416ff51b
+  zh: e0913c7be837da78
+/deepseek-ai-dsh-experimental-client-ui-agent-team:
+  en: 447e3c2bbf1ea3c6
+  zh: 25bba08497976d12
+/deepseek-ai-dsh-experimental-client-ui-agent-team/summary:
+  en: 87d09c4ec2446d76
+  zh: 83b4c84043a30f7a
+/deepseek-ai-dsh-experimental-client-ui-agent-team/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-experimental-client-ui-agent-team/use-this-package:
+  en: ba021754d3ae6d9e
+  zh: 18017b40f13e6ffd
+/deepseek-ai-dsh-experimental-client-ui-agent-team/use-this-package/inspect-and-navigate-the-roster:
+  en: 40a39de90ead0904
+  zh: 490761129c140724
+/deepseek-ai-dsh-experimental-client-ui-agent-team/use-this-package/inspect-the-lead-s-other-subagents:
+  en: 8f9057296684d428
+  zh: 49636a85e3f62e20
+/deepseek-ai-dsh-experimental-client-ui-agent-team/use-this-package/inspect-the-task-board:
+  en: dc44b45b151217c4
+  zh: a7543a4a6949d99f
+/deepseek-ai-dsh-experimental-client-ui-agent-team/understand-the-implementation:
+  en: da49e43bf189761e
+  zh: 200adbb5fd9c718e
+/deepseek-ai-dsh-experimental-client-ui-agent-team/further-exploration:
+  en: 71ac041029c64d5a
+  zh: fef2e4c5dccb8d1b
+/deepseek-ai-dsh-experimental-client-ui-agent-team/model-experience:
+  en: 47ebeba07d72759d
+  zh: 8fe8133f6dd845a9
+/deepseek-ai-dsh-experimental-client-ui-agent-team/model-experience/kv-cache-effect:
+  en: b51b320f5e4dacfc
+  zh: 6695947c3f9fed28
+/deepseek-ai-dsh-experimental-client-ui-agent-team/known-limitations-and-deferred-work:
+  en: 2ead89e94c035070
+  zh: 50e00ebc6d3e65d9
+/deepseek-ai-dsh-experimental-client-ui-agent-team/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98

@@ -1,0 +1,2132 @@
+/**
+ * bailan-expert-orchestrator — DSH agent-preset plugin
+ *
+ * An AGENT-PRESET plugin: ships the 专家编排模式 (Expert Orchestrator) preset.
+ * Since 2.5.0 the preset is DECLARED, not directory-deployed: the composition
+ * lives inline in this bundle's `cordis.patch.yml` as a `preset-<id>` row named
+ * `@deepseek-ai/dsh-agent-preset` — the only mechanism DSH >= 0.1.7-alpha
+ * reads (the legacy `~/.dsh/.agent-presets/<id>/agent.cordis.yml` directory is
+ * dead: nothing scans it, so a directory-only preset never appears in the
+ * session preset picker). Mounting the deployer below still maintains the
+ * preset's RUNTIME DATA directory, which the declaration's `skill-filesystem`
+ * row resolves via the same `resolvePresetTargetDir()` formula.
+ *
+ * Deploy policy (deliberately different from wipe-and-copy installers):
+ *   - protocol files (agent.cordis.yml — now a pointer document, preset.yml,
+ *     SKILL.md, tools/, source-registry.json) are refreshed only when the
+ *     deployed version marker differs, so editing them locally survives host
+ *     restarts and `dsh plugin update` refreshes;
+ *   - trim-cli SKILL.md router, entries/ and reference/ refresh with the
+ *     version marker; bin/ and scripts/ exist only in the deployed copy;
+ *   - lessons.md is RUNTIME USER DATA — copied only when missing, never
+ *     overwritten, never deleted;
+ *   - skills/expert-orchestration/experts/ now ships the 11 bundled-core
+ *     experts ONLY and refreshes with the version marker (T2 source
+ *     management): non-core experts live under expert-sources/<source-id>/
+ *     and are migrated out of experts/ on first apply after upgrade;
+ *   - skills/expert-gestures/ ships the /expert-<name> zero-token gesture
+ *     skills (v2.7 WP-6b: one modelInvocable:false skill per bundled-core
+ *     expert, generated with the declaration by
+ *     scripts/gen-preset-declaration.mjs) and refreshes with the version
+ *     marker — file-layer experts (.dsh/experts/*.md) are deliberately NOT
+ *     registered: the gesture covers only the stable roster;
+ *   - nothing in the target directory is ever removed (the merged view under
+ *     expert-sources/merged/ is the single derived subtree that gets rebuilt).
+ *
+ * Source management runtime (T2):
+ *   - registry: skills/expert-orchestration/source-registry.json (shipped);
+ *   - installed state: expert-sources/sources.json
+ *     ({version, sources:[{id, enabled, kind, version, sha256, upstream, lastSync, fileCount}]});
+ *   - install: download (GitHub direct → configurable mirror prefixes →
+ *     release pack fallback) → sha256 verify (mismatch = reject) → raw unpack
+ *     (zero rename, zero content edit) → security scan (credentials +
+ *     instruction-injection patterns; scan-policy revision per user ruling:
+ *     registry sources hit by the scan require an ackScan confirmation before
+ *     they register — findings are persisted for UI review; custom/local
+ *     sources keep the hard reject) → symlink members are always skipped and
+ *     recorded (skippedSymlinks), never followed → register + per-source
+ *     manifest;
+ *   - enable/disable per source; merged stable roster view under
+ *     expert-sources/merged/ (bundled-core always present + enabled sources
+ *     organised as <source-id>/<upstream-relative-path>, cross-source name
+ *     collisions coexist and are annotated in merged/roster.json);
+ *   - migration: legacy experts/ copies that are not bundled-core are moved
+ *     to expert-sources/legacy-adapted/ (frozen local source, enabled by
+ *     default) — idempotent, nothing is lost.
+ */
+
+import { join, dirname, basename, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import os from 'node:os'
+import crypto, { randomUUID } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { readSummonPreset } from './summon-preset.js'
+import {
+  mkdirSync, copyFileSync, readdirSync, existsSync, readFileSync, writeFileSync,
+  statSync, lstatSync, rmSync, renameSync,
+} from 'node:fs'
+
+// ── WP-8 ①: host settings-page Config schema ────────────────────────────────
+//
+// Exported `Config` registers the plugin's user-facing configuration on the
+// host's 插件配置 page (see lib/host-settings.js for the verified host seam and
+// the degradation discipline). Everything here is fail-open: when schemastery
+// is not resolvable (bare dev checkouts, test runs) or the build degrades,
+// `Config` stays undefined and the host simply renders no settings page — the
+// plugin load itself must never depend on this registration succeeding.
+export const Config = await (async () => {
+  try {
+    const settings = await import('./host-settings.js')
+    return (await settings.buildPluginConfigSchema()) ?? undefined
+  } catch {
+    return undefined
+  }
+})()
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PKG_ROOT = join(__dirname, '..')
+const PRESET_ID = 'expert-orchestrator'
+const VERSION = '2.9.8'
+/** Refresh the branded protocol once, including existing same-version installs. */
+const DEPLOY_REV = `${VERSION}+bailan2`
+const MARKER = '.deployed-version'
+
+const REGISTRY_REL = 'skills/expert-orchestration/source-registry.json'
+const EXPERTS_REL = 'skills/expert-orchestration/experts'
+const LESSONS_REL = 'skills/expert-orchestration/lessons.md'
+/** 每专家经验池（P1）：<slug>.md 由召唤时只读注入，deployDir/copyIfMissing 保证升级不清空。 */
+const EXPERT_LESSONS_REL = 'expert-lessons'
+/** persona 方法论深读区（P2）：Top-5 methods 由 T4 填充；召唤时只读按需指路。 */
+const EXPERT_METHODS_REL = 'expert-methods'
+const SOURCES_DIRNAME = 'expert-sources'
+const MERGED_DIRNAME = 'merged'
+const SOURCES_JSON = 'sources.json'
+const LEGACY_SOURCE_ID = 'legacy-adapted'
+const CORE_SOURCE_ID = 'bundled-core'
+
+/** Bundled core experts: the only files shipped in experts/ (no 来源 annotation). */
+export const CORE_EXPERTS = [
+  'backend-engineer.md',
+  'code-reviewer.md',
+  'data-analyst.md',
+  'devops-engineer.md',
+  'frontend-engineer.md',
+  'generalist.md',
+  'product-designer.md',
+  'project-manager.md',
+  'qa-test-engineer.md',
+  'security-auditor.md',
+  'tech-writer.md',
+]
+
+/** Runtime user data: copy only when missing, never overwrite. */
+const USER_DATA = [
+  LESSONS_REL,
+  EXPERT_LESSONS_REL,
+  EXPERT_METHODS_REL,
+]
+
+/** Protocol files: refreshed when the version marker changes. */
+const PROTOCOL = [
+  'agent.cordis.yml',
+  'preset.yml',
+  REGISTRY_REL,
+  'skills/expert-orchestration/SKILL.md',
+  'skills/expert-orchestration/routing.md',
+  'skills/expert-orchestration/roster-aliases.json',
+  EXPERTS_REL,
+  // /expert-<name> zero-token gesture skills (v2.7 WP-6b / T14): one generated
+  // modelInvocable:false skill per bundled-core expert; refreshed with the
+  // version marker like every other protocol file (generated together with the
+  // declaration by scripts/gen-preset-declaration.mjs — file-layer experts are
+  // deliberately NOT registered: the gesture covers only the stable roster).
+  'skills/expert-gestures',
+  'skills/expert-orchestration/tools/taskboard.py',
+  'skills/expert-orchestration/tools/bus.py',
+  'skills/trim-cli/SKILL.md',
+  'skills/trim-cli/manifest.json',
+  'skills/trim-cli/entries',
+  'skills/trim-cli/reference',
+  // Root release-surface docs (v2.9 T1): every VERSION bump now also re-covers
+  // the deployed README/CHANGELOG copies, closing the doc-drift gap where a
+  // deployed CHANGELOG lagged the package (2.8.0 deployed while [2.7.1]).
+  // CUSTOM_EXCLUDE ('README*.md') governs only the custom-expert refresh
+  // listing — the refreshEntry path below never consults it.
+  'README.md',
+  'README.zh.md',
+  'CHANGELOG.md',
+]
+
+// ── security scan patterns (上架核查同源标准) ────────────────────────────────
+
+export const SCAN_PATTERNS = [
+  { kind: 'credential', name: 'aws-access-key', re: /\bAKIA[0-9A-Z]{16}\b/ },
+  { kind: 'credential', name: 'private-key-block', re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----/ },
+  { kind: 'credential', name: 'github-token', re: /\b(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{36,}\b/ },
+  { kind: 'credential', name: 'github-fine-grained-pat', re: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
+  { kind: 'credential', name: 'slack-token', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+  { kind: 'credential', name: 'openai-style-key', re: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
+  { kind: 'credential', name: 'google-api-key', re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { kind: 'credential', name: 'gitlab-pat', re: /\bglpat-[A-Za-z0-9_-]{16,}\b/ },
+  { kind: 'credential', name: 'anthropic-key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
+  { kind: 'credential', name: 'generic-secret-assignment', re: /\b(?:api[_-]?key|secret|password|passwd|token)\b\s*[:=]\s*["'][A-Za-z0-9+/_.-]{16,}["']/i },
+  { kind: 'injection', name: 'ignore-prior-instructions', re: /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/i },
+  { kind: 'injection', name: 'disregard-rules', re: /disregard\s+(?:all\s+)?(?:previous|prior|your|the)\s+(?:instructions|rules|guidelines)/i },
+  { kind: 'injection', name: 'reveal-system-prompt', re: /(?:reveal|print|output|repeat)\s+(?:your\s+)?(?:full\s+)?system\s+prompt/i },
+  { kind: 'injection', name: 'pipe-to-shell', re: /\b(?:curl|wget)\s+\S+\s*\|\s*(?:ba)?sh\b/ },
+  { kind: 'injection', name: 'exfiltrate-credentials', re: /\bexfiltrat\w*\b[^.\n]{0,60}\b(?:credentials?|api[_ -]?keys?|tokens?|secrets?|private[_ -]?keys?)\b/i },
+  { kind: 'injection', name: 'solicit-secrets', re: /\bsend\s+(?:me\s+)?(?:the\s+)?(?:api[_ ]?keys?|credentials|tokens?|secrets?)\b/i },
+  { kind: 'injection', name: 'base64-decode-exec', re: /\bbase64\s+(?:--)?decode[^|]*\|\s*(?:ba)?sh\b/ },
+]
+
+/** Scan file contents for credential leaks / instruction-injection patterns.
+ *  Returns [{file, name, kind, line}]; empty array = clean. */
+export function scanSecurity(files) {
+  const findings = []
+  for (const file of files) {
+    const content = typeof file.content === 'string'
+      ? file.content
+      : readFileSync(file.path, 'utf-8')
+    const lines = content.split('\n')
+    for (const p of SCAN_PATTERNS) {
+      for (let i = 0; i < lines.length; i++) {
+        if (p.re.test(lines[i])) findings.push({ file: file.rel || file.path, name: p.name, kind: p.kind, line: i + 1 })
+      }
+    }
+  }
+  return findings
+}
+
+/** Persistence caps: scan findings / skipped symlinks kept per entry (the full
+ *  detail would bloat sources.json; caps are far above any real source). */
+export const MAX_SCAN_FINDINGS = 100
+export const MAX_SKIPPED_SYMLINKS = 100
+
+/** Scan-hit confirmation gate (user ruling, host side): a REGISTRY source
+ *  (source-registry.json, pinned sha256) whose content trips the security
+ *  scan is no longer rejected outright. First attempt WITHOUT `ackScan`
+ *  aborts the install (nothing lands, revision untouched) and surfaces this
+ *  error, which remoteDownloadSourceLocked turns into a `confirmRequired`
+ *  marker carrying the findings; the caller retries with `ackScan: true` to
+ *  register the source with the findings persisted for UI review.
+ *  CUSTOM/local-path sources keep the hard reject (scan hit = reject). */
+export class ScanConfirmationRequired extends Error {
+  constructor(sourceId, findings) {
+    const head = findings.slice(0, 3).map(f => `${f.file}:${f.line} [${f.kind}] ${f.name}`).join('; ')
+    super(`security scan flagged ${sourceId} (${findings.length} finding(s)) — registration requires confirmation (retry with ackScan:true): ${head}`)
+    this.name = 'ScanConfirmationRequired'
+    this.code = 'SCAN_CONFIRM_REQUIRED'
+    this.scanFindings = findings
+  }
+}
+
+// ── small helpers ────────────────────────────────────────────────────────────
+
+function sha256OfBuffer(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex')
+}
+
+export function sha256File(path) {
+  return sha256OfBuffer(readFileSync(path))
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, 'utf-8'))
+}
+
+function writeJsonAtomic(path, data) {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n')
+  renameSync(tmp, path)
+}
+
+/** Convert a glob (`**`, `*`, `?`) into a RegExp. */
+export function globToRegExp(glob) {
+  let re = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*') {
+      if (glob[i + 1] === '*') { re += '.*'; i++ } else { re += '[^/]*' }
+    } else if (c === '?') re += '[^/]'
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(`^${re}$`)
+}
+
+export function matchInclude(relPath, include = [], exclude = []) {
+  const inc = include.some(g => globToRegExp(g).test(relPath))
+  if (!inc) return false
+  return !exclude.some(g => globToRegExp(g).test(relPath))
+}
+
+/** Same resolution the remote service must use (security review M4 — lib/remote.js
+ *  previously defaulted to `~/.agent-presets` and landed state in another tree). */
+export function resolvePresetTargetDir(config = {}) {
+  if (config.targetDir) return config.targetDir
+  const home = process.env.DSH_HOME || join(os.homedir(), '.dsh')
+  return join(home, '.agent-presets', PRESET_ID)
+}
+
+function targetDir(config = {}) {
+  return resolvePresetTargetDir(config)
+}
+
+function sourcesDirOf(dst) { return join(dst, SOURCES_DIRNAME) }
+function mergedDirOf(dst) { return join(sourcesDirOf(dst), MERGED_DIRNAME) }
+function sourcesJsonPath(dst) { return join(sourcesDirOf(dst), SOURCES_JSON) }
+
+// ── source-id safety (security review M1) ───────────────────────────────────
+//
+// A source id becomes a path segment under expert-sources/ (and merged/), so
+// it must never be '.', '..' or anything that could climb out of that dir.
+
+/** Whitelist for source ids (also enforced against stored ids on load). */
+export const SOURCE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/
+
+/** Reject ids outside the whitelist; '.'/'..' are called out explicitly. */
+export function assertValidSourceId(id, what = 'source id') {
+  const s = String(id)
+  if (s === '.' || s === '..' || !SOURCE_ID_RE.test(s)) {
+    const e = new Error(
+      `invalid ${what}: ${JSON.stringify(s).slice(0, 80)} — must match /^[a-z0-9][a-z0-9._-]{0,127}$/ and must not be "." or ".."`)
+    e.key = 'invalid' // v2.2: bilingual key contract (client error branching)
+    throw e
+  }
+  return s
+}
+
+/** Path-traversal seatbelt: resolve(expert-sources/<id>) must stay strictly
+ *  inside resolve(expert-sources/). Defense in depth — the id whitelist above
+ *  already excludes traversal segments, this asserts it before every rm/copy. */
+function assertSourceDirInside(dst, id, what = 'source dir') {
+  const base = resolve(sourcesDirOf(dst))
+  const target = resolve(join(base, id))
+  if (target !== base && !target.startsWith(base + sep)) {
+    throw new Error(`${what} escapes expert-sources/ — refused (id: ${JSON.stringify(id).slice(0, 80)})`)
+  }
+  return target
+}
+
+// ── installed-state (sources.json) ──────────────────────────────────────────
+
+export function loadSourcesState(dst) {
+  const p = sourcesJsonPath(dst)
+  if (!existsSync(p)) {
+    return { version: 1, revision: 0, mirrorPrefixes: null, dedup: { preferLang: null, choice: {} }, sources: [], mergedStateHash: '' }
+  }
+  try {
+    const state = readJson(p)
+    if (!Array.isArray(state.sources)) throw new Error('sources must be an array')
+    // Security review M1: a stored id becomes a path segment under
+    // expert-sources/ — refuse to load a state file carrying ids outside the
+    // whitelist (report them instead of silently using them as paths).
+    const illegal = state.sources
+      .filter(s => !s || typeof s !== 'object' || s.id === '.' || s.id === '..' || !SOURCE_ID_RE.test(String(s.id)))
+      .map(s => String(s && s.id))
+    if (illegal.length) {
+      throw new Error(
+        `illegal source id(s) in state (refusing to load): ${illegal.map(i => JSON.stringify(i)).join(', ')} — ` +
+        'ids must match /^[a-z0-9][a-z0-9._-]{0,127}$/; fix expert-sources/sources.json manually or reinstall the affected sources')
+    }
+    // T3 remote contract fields (tolerate pre-T3 state files):
+    //   revision       — optimistic-lock counter bumped on every successful mutation
+    //   mirrorPrefixes — user-configured mirror chain; null/[] = defaults
+    if (!Number.isInteger(state.revision) || state.revision < 0) state.revision = 0
+    if (state.mirrorPrefixes !== null && !Array.isArray(state.mirrorPrefixes)) state.mirrorPrefixes = null
+    // T4 dedup state (tolerate pre-dedup state files):
+    //   dedup.preferLang — explicit 'zh'/'en' language preference; null = follow
+    //                      the registry default (defaults.preferLang, itself 'zh')
+    //   dedup.choice     — { [dedupGroupKey]: sourceId } manual representative picks
+    if (!state.dedup || typeof state.dedup !== 'object' || Array.isArray(state.dedup)) state.dedup = {}
+    if (state.dedup.preferLang !== 'zh' && state.dedup.preferLang !== 'en') state.dedup.preferLang = null
+    if (!state.dedup.choice || typeof state.dedup.choice !== 'object' || Array.isArray(state.dedup.choice)) {
+      state.dedup.choice = {}
+    } else {
+      state.dedup.choice = Object.fromEntries(Object.entries(state.dedup.choice).filter(
+        ([k, v]) => typeof k === 'string' && k.length > 0 && k.length <= 256
+          && typeof v === 'string' && SOURCE_ID_RE.test(v)))
+    }
+    return state
+  } catch (err) {
+    throw new Error(`expert-sources/${SOURCES_JSON} is corrupt: ${err.message}`)
+  }
+}
+
+export function saveSourcesState(dst, state) {
+  writeJsonAtomic(sourcesJsonPath(dst), state)
+}
+
+function upsertSource(state, entry) {
+  const i = state.sources.findIndex(s => s.id === entry.id)
+  if (i >= 0) state.sources[i] = { ...state.sources[i], ...entry }
+  else state.sources.push(entry)
+}
+
+// ── registry ────────────────────────────────────────────────────────────────
+
+export function loadRegistry(dst) {
+  const candidates = [join(dst, REGISTRY_REL), join(PKG_ROOT, REGISTRY_REL)]
+  for (const p of candidates) {
+    if (existsSync(p)) return readJson(p)
+  }
+  throw new Error(`source registry not found (looked at: ${candidates.join(', ')})`)
+}
+
+// ── download channels: direct → mirrors (prefix configurable) → pack ────────
+
+const FETCH_TIMEOUT_MS = 30_000
+
+/** Fetch a URL as Buffer; retries once on transient TLS/network resets. */
+export async function fetchBuffer(url) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), redirect: 'follow' })
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+      return Buffer.from(await res.arrayBuffer())
+    } catch (err) {
+      const transient = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminated|aborted|fetch failed|network/i.test(String(err?.cause?.code || err?.message || err))
+      if (attempt === 2 || !transient) throw new Error(`download failed: ${url}: ${err.message}`)
+    }
+  }
+}
+
+/** Resolve the ordered channel URL list for one registry source.
+ *  opts.channel: 'github' = direct first (legacy default); 'cdn' = mirror
+ *  prefixes first, direct fallback. opts.mirrorPrefixes overrides env/registry. */
+export function resolveChannels(source, registry, env = process.env, opts = {}) {
+  const urls = []
+  const fill = (tpl) => tpl
+    .replaceAll('{repo}', source.upstream.repo)
+    .replaceAll('{ref}', source.upstream.ref)
+  const prefixes = opts.mirrorPrefixes
+    ?? (env.DSH_GH_MIRROR_PREFIXES
+      ? env.DSH_GH_MIRROR_PREFIXES.split(',').map(s => s.trim()).filter(Boolean)
+      : registry.defaults.mirrorPrefixes)
+  const mirrorFirst = opts.channel === 'cdn'
+  const pushDirect = () => urls.push({ channel: 'direct', url: fill(registry.defaults.directTemplate) })
+  const pushMirrors = () => {
+    for (const prefix of prefixes) {
+      urls.push({ channel: `mirror:${prefix}`, url: fill(registry.defaults.mirrorTemplate).replaceAll('{prefix}', prefix.endsWith('/') ? prefix : `${prefix}/`) })
+    }
+  }
+  if (mirrorFirst) { pushMirrors(); pushDirect() } else { pushDirect(); pushMirrors() }
+  return urls
+}
+
+/** Extract a .tar.gz buffer into destDir using the system tar. */
+export function untar(buffer, destDir) {
+  mkdirSync(destDir, { recursive: true })
+  const tmp = join(destDir, `.pack-${process.pid}.tgz`)
+  writeFileSync(tmp, buffer)
+  try {
+    const res = spawnSync('tar', ['-xzf', tmp, '-C', destDir], { encoding: 'utf-8' })
+    if (res.status !== 0) throw new Error(`tar exited ${res.status}: ${(res.stderr || '').trim()}`)
+  } finally {
+    rmSync(tmp, { force: true })
+  }
+}
+
+/** Walk a directory collecting regular files only. Security review M2: lstat
+ *  (never stat) — symbolic links (file or directory) are skipped, never
+ *  followed, never dereferenced into the install/scan/merged pipeline. */
+function listFilesRecursive(dir, prefix = '') {
+  const out = []
+  if (!existsSync(dir)) return out
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name)
+    const rel = prefix ? `${prefix}/${name}` : name
+    let st
+    try { st = lstatSync(full) } catch { continue }
+    if (st.isSymbolicLink()) continue // M2: symlink members never enter the trust face
+    if (st.isDirectory()) out.push(...listFilesRecursive(full, rel))
+    else if (st.isFile()) out.push({ rel, path: full })
+  }
+  return out
+}
+
+/** Security policy revision (user ruling, host side): symlink members are
+ *  SKIPPED, not rejected. Walk the tree (staging copy for archives, the real
+ *  directory for local sources), record every symbolic link (file or
+ *  directory) rel path into `out`, and NEVER follow it — listFilesRecursive
+ *  skips them so they never enter the install/scan/merged pipeline. The list
+ *  is persisted on the sources.json entry (skippedSymlinks) for UI display. */
+function collectSkippedSymlinks(dir, top = dir, out = []) {
+  if (!existsSync(dir)) return out
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name)
+    const rel = full.slice(top.length + 1)
+    let st
+    try { st = lstatSync(full) } catch { continue }
+    if (st.isSymbolicLink()) { out.push(rel); continue } // skip + record, never follow
+    if (st.isDirectory()) collectSkippedSymlinks(full, top, out)
+  }
+  return out
+}
+
+// ── install ─────────────────────────────────────────────────────────────────
+
+/**
+ * Install one registry source into <dst>/expert-sources/<id>/ (raw unpack:
+ * zero rename, zero content edit; provenance lives in a sidecar manifest so
+ * upstream files stay byte-identical).
+ * Scan-hit policy (user ruling): registry sources hit by the security scan
+ * abort with ScanConfirmationRequired unless opts.ackScan === true; an acked
+ * install registers with the findings persisted (scanFindings + scanAckAt).
+ * Symlink members are always skipped and recorded (skippedSymlinks).
+ * @returns the registered sources.json entry.
+ */
+export async function installSource(dst, sourceId, opts = {}) {
+  assertValidSourceId(sourceId, 'registry source id')
+  const registry = opts.registry || loadRegistry(dst)
+  const entry = registry.sources.find(s => s.id === sourceId)
+  if (!entry) throw new Error(`unknown source id: ${sourceId}`)
+  const log = opts.log || []
+
+  // 1) download through the ordered channel list
+  const channels = resolveChannels(entry, registry, opts.env, { channel: opts.channel, mirrorPrefixes: opts.mirrorPrefixes })
+  let buffer = null
+  let usedChannel = null
+  const errors = []
+  for (const ch of channels) {
+    try {
+      log.push(`channel ${ch.channel}: ${ch.url}`)
+      buffer = await fetchBuffer(ch.url)
+      usedChannel = ch
+      break
+    } catch (err) {
+      errors.push(`${ch.channel}: ${err.message}`)
+    }
+  }
+  if (!buffer) throw new Error(`all channels failed for ${sourceId}:\n  ${errors.join('\n  ')}`)
+
+  // 2) verify: archive-channel → pinned archive sha256; pack-channel → pack sha256
+  const staging = assertSourceDirInside(dst, `.staging-${sourceId}-${process.pid}`, 'staging dir')
+  rmSync(staging, { recursive: true, force: true })
+  try {
+    let perFileManifest = null
+    if (usedChannel.pack) {
+      if (sha256OfBuffer(buffer) !== registry.pack.sha256) {
+        throw new Error(`sha256 mismatch for pack (expected ${registry.pack.sha256}) — rejected`)
+      }
+      untar(buffer, staging)
+      const manifestPath = join(staging, 'MANIFEST.json')
+      if (!existsSync(manifestPath)) throw new Error('pack is missing MANIFEST.json')
+      perFileManifest = readJson(manifestPath)
+    } else {
+      if (sha256OfBuffer(buffer) !== entry.sha256) {
+        throw new Error(`sha256 mismatch for ${sourceId} archive (expected ${entry.sha256}) — rejected`)
+      }
+      untar(buffer, staging)
+    }
+    // 3) locate the unpacked repo root, select files by include/exclude
+    //    (pack channel: sources live under <sourceId>/ inside the pack)
+    let root = staging
+    if (usedChannel.pack) {
+      const packSourceRoot = join(staging, sourceId)
+      if (!existsSync(packSourceRoot)) {
+        throw new Error(`pack does not carry a classic subset for ${sourceId}`)
+      }
+      root = packSourceRoot
+    } else {
+      const unpacked = readdirSync(staging)
+      // M2-edge: lstat (never stat) — a symlink-to-dir top member must not be
+      // treated as the unpacked root. Wrapped layout = the ONLY top-level
+      // member is a real directory; otherwise stay at staging.
+      if (unpacked.length === 1 && lstatSync(join(staging, unpacked[0])).isDirectory()) {
+        root = join(staging, unpacked[0])
+      }
+    }
+    // Symlink policy (user ruling): members are skipped + recorded, never
+    // followed and never rejected — rel paths are relative to the source root.
+    const skippedSymlinks = collectSkippedSymlinks(root).slice(0, MAX_SKIPPED_SYMLINKS)
+    const all = listFilesRecursive(root)
+    const selected = all
+      .filter(f => !f.rel.split('/').includes('..')) // archive path-traversal guard
+      .filter(f => matchInclude(f.rel, entry.include, entry.exclude))
+    if (!selected.length) throw new Error(`no files matched include patterns for ${sourceId}`)
+
+    // 4) security scan before anything is registered. Registry sources:
+    //    hit → confirmation gate (ScanConfirmationRequired) unless acked;
+    //    acked hit → register with the findings persisted for UI review.
+    const findings = scanSecurity(selected)
+    if (findings.length && opts.ackScan !== true) {
+      throw new ScanConfirmationRequired(sourceId, findings)
+    }
+    if (findings.length) log.push(`scan: ${findings.length} finding(s) acknowledged by user (ackScan) — registering with persisted findings`)
+
+    // 5) raw unpack into expert-sources/<id>/ (replace previous install atomically enough)
+    const sourceDir = assertSourceDirInside(dst, sourceId) // M1: prefix seatbelt
+    rmSync(sourceDir, { recursive: true, force: true })
+    mkdirSync(sourceDir, { recursive: true })
+    const manifest = {
+      id: sourceId,
+      kind: 'download',
+      version: entry.version,
+      license: entry.license,
+      upstream: entry.upstream,
+      channel: usedChannel.channel,
+      installedAt: new Date().toISOString(),
+      scanFindings: findings.slice(0, MAX_SCAN_FINDINGS),
+      skippedSymlinks,
+      files: [],
+    }
+    for (const f of selected) {
+      const dest = join(sourceDir, f.rel)
+      mkdirSync(dirname(dest), { recursive: true })
+      copyFileSync(f.path, dest)
+      const digest = sha256File(dest)
+      const upstreamEntry = perFileManifest
+        ? (perFileManifest.sources || []).flatMap(s => s.files || []).find(x => x.path === `${sourceId}/${f.rel}`)
+        : null
+      if (upstreamEntry && upstreamEntry.sha256 && upstreamEntry.sha256 !== digest) {
+        throw new Error(`pack file sha256 mismatch: ${f.rel} — rejected`)
+      }
+      manifest.files.push({ path: f.rel, sha256: digest, upstreamPath: `${entry.upstream.repo}/${f.rel}@${entry.upstream.ref}` })
+    }
+    writeJsonAtomic(join(sourceDir, '.source-manifest.json'), manifest)
+
+    // 6) register + rebuild merged view
+    const state = loadSourcesState(dst)
+    const registered = {
+      id: sourceId,
+      enabled: opts.enabled ?? true,
+      kind: 'download',
+      version: usedChannel.pack ? `${entry.version}+classic-pack` : entry.version,
+      sha256: usedChannel.pack ? registry.pack.sha256 : entry.sha256,
+      upstream: { repo: entry.upstream.repo, url: entry.upstream.url, ref: entry.upstream.ref },
+      lastSync: new Date().toISOString(),
+      fileCount: manifest.files.length,
+      scanFindings: findings.slice(0, MAX_SCAN_FINDINGS),
+      skippedSymlinks,
+    }
+    if (findings.length) registered.scanAckAt = new Date().toISOString() // persisted user confirmation
+    upsertSource(state, registered)
+    saveSourcesState(dst, state)
+    rebuildMergedView(dst, { log })
+    log.push(`installed ${sourceId} v${entry.version} via ${usedChannel.channel} (${manifest.files.length} files)`)
+    return registered
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
+  }
+}
+
+/** Enable/disable one installed source; rebuilds the merged view. */
+export function setSourceEnabled(dst, sourceId, enabled) {
+  assertValidSourceId(sourceId)
+  const state = loadSourcesState(dst)
+  const entry = state.sources.find(s => s.id === sourceId)
+  if (!entry) throw new Error(`source not installed: ${sourceId}`)
+  entry.enabled = !!enabled
+  saveSourcesState(dst, state)
+  rebuildMergedView(dst)
+  return entry
+}
+
+// ── T3 remote contract: SourcesSnapshot + 7-method expertSources API ────────
+//
+// The settings page (lib/client.js, T3) declares the client side of this
+// contract; the host side below is the single source of truth for behaviour.
+// All mutating methods take `expectedRevision` (optimistic lock against
+// sources.json `revision`); all of them (plus getSources) resolve to a
+// SourcesSnapshot: { revision, sources[], mirrorPrefixes[], conflicts[] }.
+// A failed mutation never bumps the revision, so the client's cached
+// snapshot stays valid and the conflict-check loop cannot dead-lock.
+
+const CUSTOM_INCLUDE = ['*.md', '**/*.md'] // globToRegExp: '**/' requires a directory segment
+const CUSTOM_EXCLUDE = ['.github/**', 'README*.md', 'node_modules/**']
+const MAX_MIRROR_PREFIXES = 16
+const GITHUB_REPO_RE = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)\/?$/
+const LOCAL_PATH_RE = /^(~\/|\/|\.\/|\.\.\/)/
+
+/** Mirror chain actually used for downloads: user config → env → registry. */
+function effectiveMirrorPrefixes(registry, state, env = process.env) {
+  if (Array.isArray(state.mirrorPrefixes) && state.mirrorPrefixes.length) return state.mirrorPrefixes
+  if (env.DSH_GH_MIRROR_PREFIXES) {
+    return env.DSH_GH_MIRROR_PREFIXES.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  return registry.defaults.mirrorPrefixes
+}
+
+/** Named stale-revision conflict (WP-8 ②): thrown by every mutating
+ *  expertSources method when a SUPPLIED expectedRevision no longer matches the
+ *  stored revision. `name` + `code` give host/wire layers a stable marker (the
+ *  host settings seam raises the same shape with code SETTINGS_CONFLICT);
+ *  `expected`/`actual` mirror the host conflict error fields. The message text
+ *  is unchanged — existing clients branch on /expert sources state changed/. */
+export class SourcesRevisionConflictError extends Error {
+  constructor(expectedRevision, currentRevision) {
+    super(`expert sources state changed since it was read (expectedRevision ${expectedRevision}, current revision ${currentRevision}) — reload sources and retry`)
+    this.name = 'SourcesRevisionConflictError'
+    this.code = 'REVISION_CONFLICT'
+    this.expected = expectedRevision
+    this.actual = currentRevision
+  }
+}
+
+/** Optimistic-lock guard: a supplied expectedRevision must equal the stored
+ *  revision (WP-8 ②). The parameter is OPTIONAL for backward compatibility —
+ *  a caller that omits it (undefined) skips the comparison and the write
+ *  proceeds unguarded, exactly as pre-lock callers expect; every other
+ *  invalid value is still rejected. Failed mutations never bump the revision
+ *  (commitSourcesState is reached only past this guard). */
+function assertRevision(state, expectedRevision) {
+  const current = state.revision ?? 0
+  if (expectedRevision === undefined) return
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw new Error(`expectedRevision must be a non-negative integer (got ${JSON.stringify(expectedRevision)})`)
+  }
+  if (expectedRevision !== current) {
+    throw new SourcesRevisionConflictError(expectedRevision, current)
+  }
+}
+
+function commitSourcesState(dst, state) {
+  state.revision = (state.revision ?? 0) + 1
+  saveSourcesState(dst, state)
+  rebuildMergedView(dst)
+}
+
+/** Record a terminal failure status on one entry WITHOUT bumping the
+ *  revision (a failed mutation leaves the client's snapshot valid). An entry
+ *  that was never installed gets a stub so the settings page can still show
+ *  the failure on its row; a later successful install upserts over it. */
+function recordSourceFailure(dst, sourceId, message) {
+  try {
+    const state = loadSourcesState(dst)
+    let entry = state.sources.find(s => s.id === sourceId)
+    if (!entry) {
+      entry = {
+        id: sourceId, enabled: false, kind: 'registry', version: null,
+        sha256: null, upstream: null, lastSync: null, fileCount: 0,
+      }
+      state.sources.push(entry)
+    }
+    entry.status = /sha256 mismatch|verify/i.test(message)
+      ? 'verifyFailed'
+      : /security scan/i.test(message) ? 'scanRejected' : 'error'
+    entry.statusDetail = String(message).slice(0, 512)
+    saveSourcesState(dst, state)
+  } catch { /* status recording is best-effort; the original error wins */ }
+}
+
+/** Persist the scan-hit confirmation gate state on one entry WITHOUT bumping
+ *  the revision (mirrors recordSourceFailure). Reuses the existing client-side
+ *  `scanRejected` status (client codec validates status against a fixed enum)
+ *  with a statusDetail explaining that an ackScan confirmation is pending.
+ *  The full findings list is persisted (scanFindings) so the details stay
+ *  queryable from sources.json / the snapshot even before confirmation. */
+function recordScanConfirmation(dst, sourceId, findings) {
+  try {
+    const state = loadSourcesState(dst)
+    let entry = state.sources.find(s => s.id === sourceId)
+    if (!entry) {
+      entry = {
+        id: sourceId, enabled: false, kind: 'registry', version: null,
+        sha256: null, upstream: null, lastSync: null, fileCount: 0,
+      }
+      state.sources.push(entry)
+    }
+    const first = findings[0] ? ` (first: ${findings[0].file}:${findings[0].line} [${findings[0].kind}] ${findings[0].name})` : ''
+    entry.status = 'scanRejected'
+    entry.statusDetail = `security scan: ${findings.length} finding(s) — awaiting ackScan confirmation, nothing registered; retry download with ackScan:true${first}`.slice(0, 512)
+    entry.scanFindings = findings.slice(0, MAX_SCAN_FINDINGS)
+    saveSourcesState(dst, state)
+  } catch { /* best-effort; the marker return below still carries the findings */ }
+}
+
+/** Classify one basename collision group (pure; unit-testable).
+ *
+ *  occ:        [{sourceId, file}] — every enabled-source hit for one basename.
+ *  groupKeyOf: (sourceId, file) -> dedup group key | null (from the engine).
+ *  materialOf: (sourceId, file) -> normalized identity | null (name/title).
+ *
+ *  'resolved-by-dedup': all hits sit in ONE dedup group (a representative
+ *    exists) — the engine already disambiguated the call target; no alarm.
+ *  'basename-only': identities differ (or are undeterminable for at least one
+ *    hit while not all equal) — different experts sharing a filename, no
+ *    summon ambiguity; no alarm.
+ *  'unresolved': every hit carries the SAME normalized identity yet the
+ *    engine did NOT merge them — defensive branch for future sources; must
+ *    keep the alarm surface. */
+export function classifyBasenameConflict(occ, groupKeyOf, materialOf) {
+  const hits = (Array.isArray(occ) ? occ : []).filter(o => o && o.sourceId && o.file)
+  if (hits.length < 2) return 'basename-only'
+  const keys = hits.map(o => groupKeyOf(o.sourceId, o.file) ?? null)
+  if (keys[0] && keys.every(k => k === keys[0])) return 'resolved-by-dedup'
+  const mats = hits.map(o => materialOf(o.sourceId, o.file) ?? null)
+  if (mats[0] && mats.every(m => m === mats[0])) return 'unresolved'
+  return 'basename-only'
+}
+
+/** Cross-source expert-name collisions among enabled sources (incl. core).
+ *
+ *  Alarm surface = unresolved ambiguities only (2026-09-18 user ruling):
+ *  basename collisions the dedup engine classified as 'resolved-by-dedup' or
+ *  'basename-only' never alarm (see classifyBasenameConflict). Classified
+ *  records come from merged/roster.json when it covers exactly the currently
+ *  enabled source set; otherwise the raw basename computation is used as a
+ *  conservative fallback (may over-alarm until the roster rebuilds). */
+function computeConflicts(dst, state) {
+  const enabledIds = [CORE_SOURCE_ID, ...state.sources.filter(s => s.enabled).map(s => s.id)].sort()
+  try {
+    const roster = readJson(join(sourcesDirOf(dst), 'merged', 'roster.json'))
+    const rosterIds = [CORE_SOURCE_ID, ...roster.sources.map(s => s.id)].sort()
+    if (JSON.stringify(enabledIds) === JSON.stringify(rosterIds)) {
+      // Unclassified entries (pre-2.1.1 roster) alarm conservatively — old
+      // behavior — until the format-tag rebuild re-classifies them.
+      return (roster.conflicts ?? [])
+        .filter(c => c.class === 'unresolved' || c.class === undefined)
+        .map(c => ({ expert: c.basename, sources: c.occurrences.map(o => o.source) }))
+    }
+  } catch { /* roster missing/unreadable -> conservative fallback below */ }
+  const byName = new Map()
+  const add = (name, id) => {
+    if (!byName.has(name)) byName.set(name, [])
+    const ids = byName.get(name)
+    if (!ids.includes(id)) ids.push(id)
+  }
+  for (const name of CORE_EXPERTS) add(name, CORE_SOURCE_ID)
+  for (const s of state.sources) {
+    if (!s.enabled) continue
+    const manifestPath = join(sourcesDirOf(dst), s.id, '.source-manifest.json')
+    if (!existsSync(manifestPath)) continue
+    let manifest
+    try { manifest = readJson(manifestPath) } catch { continue }
+    for (const f of manifest.files ?? []) add(basename(f.path), s.id)
+  }
+  return [...byName.entries()]
+    .filter(([, ids]) => ids.length > 1)
+    .map(([expert, ids]) => ({ expert, sources: ids }))
+}
+
+// ── T4 cross-source dedup engine (pure functions, unit-testable) ────────────
+//
+// User ruling context: cross-source duplicate experts triggered too easily.
+// The engine groups expert files that denote the SAME expert and elects ONE
+// representative per group; non-representative members are annotated
+// `shadowed: true` in merged/roster.json — files stay on disk in their own
+// source directories, nothing is deleted, safety-scan state is untouched.
+
+/** The agency pair: agency-agents (en) and agency-agents-zh (zh) mirror the
+ *  same expert catalogue in two languages. 实测 (2026-09, upstream archives
+ *  agency-agents@ad9264e / agency-agents-zh@da1542f): both share the
+ *  `<domain>/<domain>-<slug>.md` layout, so identical relative paths denote
+ *  the same expert (中英对照). Name/title normalization is only the generic
+ *  link; the pair rule covers the en/zh name divergence. */
+export const DEDUP_AGENCY_PAIR = ['agency-agents', 'agency-agents-zh']
+
+/** Normalize an expert name/title for equality: NFKC fold, lowercase, strip
+ *  every whitespace / punctuation / symbol codepoint. "Backend Architect" ===
+ *  "backend-architect"; "后端架构师" is stable. */
+export function normalizeExpertName(value) {
+  if (typeof value !== 'string') return ''
+  return value.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '')
+}
+
+function cleanFrontmatterScalar(v) {
+  const s = String(v).trim()
+  const q = /^["'](.*)["']$/.exec(s)
+  return (q ? q[1] : s).trim() || null
+}
+
+/** Extract {name, title} from an expert markdown body: frontmatter `name:`
+ *  and `title:` fields, plus the first H1 outside code fences as the title
+ *  fallback. Pure text heuristic — never throws, returns nulls when absent. */
+export function parseExpertIdentity(content) {
+  const out = { name: null, title: null }
+  if (typeof content !== 'string') return out
+  let body = content
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)
+  if (fm) {
+    body = content.slice(fm[0].length)
+    const nameM = /^name:[ \t]*(.+)$/m.exec(fm[1])
+    if (nameM) out.name = cleanFrontmatterScalar(nameM[1])
+    const titleM = /^title:[ \t]*(.+)$/m.exec(fm[1])
+    if (titleM) out.title = cleanFrontmatterScalar(titleM[1])
+  }
+  if (!out.title) {
+    let fenced = false
+    for (const line of body.split('\n')) {
+      if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue }
+      if (fenced) continue
+      const h1 = /^#\s+(.+?)\s*#*\s*$/.exec(line)
+      if (h1) { out.title = h1[1].replace(/[*_`]+/g, '').trim() || null; break }
+    }
+  }
+  return out
+}
+
+/** Pure dedup engine.
+ *
+ *  entries: [{sourceId, file, name, title, rank}] — one per expert file of
+ *    every ENABLED source (`rank` = deterministic source order, lower wins).
+ *  opts:    {choice: {groupKey: sourceId}, preferLang: 'zh'|'en'}.
+ *
+ *  Grouping rules (overlapping links merge transitively via union-find):
+ *    (a) identical normalized name (normalized title only as the key material
+ *        when the file carries no name) — same title with a DIFFERENT name
+ *        never merges (rule c of the contract);
+ *    (b) DEDUP_AGENCY_PAIR sources: identical relative path = same expert.
+ *  Group key: `pair:<rel>` when the group is pair-linked (smallest such rel,
+ *  deterministic), else `name:<norm>` of the first (rank, file) member.
+ *  Representative priority: choice[key] (must be a member; a stale choice is
+ *  ignored) > preferLang (applies to the agency pair only) > rank > first
+ *  member. Only groups with >1 member are returned. `rule` ∈
+ *  'agency-path-pair' | 'name-match' | 'mixed'.
+ */
+export function buildDedupGroups(entries, opts = {}) {
+  const list = (Array.isArray(entries) ? entries : []).filter(
+    e => e && typeof e.sourceId === 'string' && typeof e.file === 'string' && e.file !== '')
+  const choice = (opts.choice && typeof opts.choice === 'object' && !Array.isArray(opts.choice)) ? opts.choice : {}
+  const preferLang = opts.preferLang === 'en' ? 'en' : 'zh'
+  if (list.length < 2) return []
+
+  const keyOf = e => `${e.sourceId}\u0000${e.file}`
+  const parent = new Map()
+  const find = x => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x) } return x }
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb) }
+  for (const e of list) parent.set(keyOf(e), keyOf(e))
+
+  // (a) same normalized name/title material
+  const byMaterial = new Map()
+  for (const e of list) {
+    const material = normalizeExpertName(e.name) || normalizeExpertName(e.title)
+    if (!material) continue
+    if (!byMaterial.has(material)) byMaterial.set(material, [])
+    byMaterial.get(material).push(e)
+  }
+  for (const group of byMaterial.values()) {
+    for (let i = 1; i < group.length; i++) union(keyOf(group[0]), keyOf(group[i]))
+  }
+
+  // (b) agency pair: same relative path
+  const byPairRel = new Map()
+  for (const e of list) {
+    if (!DEDUP_AGENCY_PAIR.includes(e.sourceId)) continue
+    if (!byPairRel.has(e.file)) byPairRel.set(e.file, [])
+    byPairRel.get(e.file).push(e)
+  }
+  for (const group of byPairRel.values()) {
+    for (let i = 1; i < group.length; i++) union(keyOf(group[0]), keyOf(group[i]))
+  }
+
+  const clusters = new Map()
+  for (const e of list) {
+    const root = find(keyOf(e))
+    if (!clusters.has(root)) clusters.set(root, [])
+    clusters.get(root).push(e)
+  }
+
+  const groups = []
+  for (const members of clusters.values()) {
+    if (members.length < 2) continue
+    members.sort((a, b) => ((a.rank ?? 0) - (b.rank ?? 0)) || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+    const relCount = new Map()
+    for (const m of members) {
+      if (DEDUP_AGENCY_PAIR.includes(m.sourceId)) relCount.set(m.file, (relCount.get(m.file) ?? 0) + 1)
+    }
+    const pairRels = [...relCount.entries()].filter(([, n]) => n > 1).map(([r]) => r).sort()
+    const isPair = pairRels.length > 0
+    const allPair = members.every(m => DEDUP_AGENCY_PAIR.includes(m.sourceId))
+    const key = isPair ? `pair:${pairRels[0]}` : `name:${normalizeExpertName(members[0].name) || normalizeExpertName(members[0].title)}`
+    const rule = isPair ? (allPair ? 'agency-path-pair' : 'mixed') : 'name-match'
+
+    let rep = null
+    const chosenId = choice[key]
+    if (typeof chosenId === 'string') rep = members.find(m => m.sourceId === chosenId) ?? null
+    if (!rep) {
+      const langOf = id => !DEDUP_AGENCY_PAIR.includes(id) ? null : (id.endsWith('-zh') ? 'zh' : 'en')
+      const preferred = members.filter(m => langOf(m.sourceId) === preferLang)
+      rep = (preferred.length ? preferred : members)[0]
+    }
+    groups.push({
+      key,
+      members: members.map(m => ({ sourceId: m.sourceId, file: m.file, name: m.name ?? null, title: m.title ?? null })),
+      representative: { sourceId: rep.sourceId, file: rep.file },
+      rule,
+    })
+  }
+  return groups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+}
+
+/** Deterministic source order for representative tie-breaks: bundled-core (0)
+ *  < legacy-adapted (1) < registry order (2+i) < custom sources (1000+state). */
+function sourceRank(state, registry, id) {
+  if (id === CORE_SOURCE_ID) return 0
+  if (id === LEGACY_SOURCE_ID) return 1
+  const ri = (registry?.sources ?? []).findIndex(s => s.id === id)
+  if (ri >= 0) return 2 + ri
+  const si = (state?.sources ?? []).findIndex(s => s.id === id)
+  return 1000 + (si < 0 ? 0 : si)
+}
+
+/** Effective preferLang: explicit user setting (sources.json dedup.preferLang)
+ *  wins, else the registry default, else 'zh' (agency-agents-zh preferred). */
+function preferLangOf(state, registry) {
+  if (state?.dedup?.preferLang === 'en' || state?.dedup?.preferLang === 'zh') return state.dedup.preferLang
+  return registry?.defaults?.preferLang === 'en' ? 'en' : 'zh'
+}
+
+/** Compute the dedup groups for the snapshot from the merged roster (single
+ *  file read — identities are recorded during rebuildMergedView). Rosters
+ *  written before the dedup engine (rosterFormat < 2) carry no name/title:
+ *  report no groups rather than guessing, the next rebuild upgrades them. */
+export function computeDedupGroups(dst, state, registry) {
+  const rosterPath = join(mergedDirOf(dst), 'roster.json')
+  if (!existsSync(rosterPath)) return []
+  let roster
+  try { roster = readJson(rosterPath) } catch { return [] }
+  if (!roster || roster.rosterFormat !== 2) return []
+  const entries = []
+  const push = (sourceId, row) => {
+    if (!row || typeof row.file !== 'string') return
+    entries.push({
+      sourceId, file: row.file, name: row.name ?? null, title: row.title ?? null,
+      rank: sourceRank(state, registry, sourceId),
+    })
+  }
+  for (const row of roster.core ?? []) push(CORE_SOURCE_ID, row)
+  for (const src of roster.sources ?? []) for (const row of src.files ?? []) push(src.id, row)
+  return buildDedupGroups(entries, {
+    choice: state?.dedup?.choice ?? {},
+    preferLang: preferLangOf(state, registry),
+  })
+}
+
+/** Build the SourcesSnapshot consumed by the settings page. */
+export function buildSourcesSnapshot(dst) {
+  const registry = loadRegistry(dst)
+  const state = loadSourcesState(dst)
+  const installed = new Map(state.sources.map(s => [s.id, s]))
+  const sources = []
+
+  sources.push({
+    id: CORE_SOURCE_ID,
+    name: 'Bundled Core',
+    upstream: '',
+    license: 'MIT',
+    installedVersion: VERSION,
+    enabled: true,
+    builtin: true,
+    status: 'ok',
+    statusDetail: null,
+    lastUpdated: null,
+  })
+
+  const legacy = installed.get(LEGACY_SOURCE_ID)
+  if (legacy) {
+    sources.push({
+      id: LEGACY_SOURCE_ID,
+      name: 'Legacy Adapted',
+      upstream: '',
+      license: 'MIT',
+      installedVersion: legacy.version ?? null,
+      enabled: !!legacy.enabled,
+      builtin: false, // toggle allowed; removal is refused host-side (frozen data)
+      status: legacy.status ?? 'ok',
+      statusDetail: legacy.statusDetail ?? null,
+      lastUpdated: legacy.lastSync ?? null,
+    })
+  }
+
+  for (const reg of registry.sources) {
+    const inst = installed.get(reg.id)
+    sources.push({
+      id: reg.id,
+      name: reg.title || reg.id,
+      upstream: reg.upstream?.url ?? '',
+      license: reg.license ?? '',
+      installedVersion: inst?.version ?? null,
+      enabled: !!inst?.enabled,
+      builtin: false,
+      status: inst ? (inst.status ?? 'ok') : 'idle',
+      statusDetail: inst?.statusDetail ?? null,
+      lastUpdated: inst?.lastSync ?? null,
+      // Scan-policy revision (user ruling): per-source findings / skipped
+      // symlink lists for UI display (null = never installed).
+      scanFindings: inst?.scanFindings ?? null,
+      skippedSymlinks: inst?.skippedSymlinks ?? null,
+      // T4 recommended config data: registry-curated one-click recommendation
+      // set (bundled-core is implied always-on and carries no flag).
+      recommended: reg.recommended === true,
+    })
+  }
+
+  for (const s of state.sources) {
+    if (s.kind !== 'custom') continue
+    if (registry.sources.some(r => r.id === s.id)) continue
+    sources.push({
+      id: s.id,
+      name: s.name || s.id,
+      upstream: s.upstream?.url ?? '',
+      license: s.license ?? '',
+      installedVersion: s.version ?? null,
+      enabled: !!s.enabled,
+      builtin: false,
+      status: s.status ?? (s.version ? 'ok' : 'idle'),
+      statusDetail: s.statusDetail ?? null,
+      lastUpdated: s.lastSync ?? null,
+      scanFindings: null, // custom sources: scan hit = hard reject, nothing persisted
+      skippedSymlinks: s.skippedSymlinks ?? null,
+    })
+  }
+
+  const snapshot = {
+    revision: state.revision ?? 0,
+    sources,
+    mirrorPrefixes: [...effectiveMirrorPrefixes(registry, state)],
+    conflicts: computeConflicts(dst, state),
+    // T4 dedup: groups with >1 member among enabled sources only; the
+    // representative honours dedup.choice > preferLang > registry order.
+    dedupGroups: computeDedupGroups(dst, state, registry),
+    // T4 recommended config data: bilingual one-liner for the client's
+    // one-click recommendation entry (null when the registry ships none).
+    recommendedNote: typeof registry.recommendedNote === 'string' ? registry.recommendedNote : null,
+  }
+
+  // v2.2 per-expert rows + custom experts (additive fields; the client treats
+  // them as optional per the v2.1 codec precedent — older clients ignore them)
+  const expertEnabled = state.expertEnabled ?? {}
+  let customList = []
+  let customError = null
+  try { customList = loadCustomExperts(dst) } catch (err) { customError = String(err.message).slice(0, 256) }
+  let rosterData = null
+  try {
+    const r = readMergedRoster(dst)
+    if (r && r.rosterFormat === 2) rosterData = r
+  } catch { rosterData = null }
+
+  const filesOf = sourceId => {
+    if (!rosterData) return undefined
+    if (sourceId === CORE_SOURCE_ID) {
+      return (rosterData.core ?? []).map(row => ({
+        file: row.file, name: row.name ?? null, title: row.title ?? null,
+        enabled: expertEnabled[`${CORE_SOURCE_ID}/${row.file}`] !== false && row.disabled !== true,
+        shadowed: row.shadowed === true, disabled: row.disabled === true, custom: false,
+      }))
+    }
+    const src = (rosterData.sources ?? []).find(s => s.id === sourceId)
+    if (!src) return undefined
+    return (src.files ?? []).map(row => ({
+      file: row.file, slug: row.slug ?? null, name: row.name ?? null, title: row.title ?? null,
+      enabled: expertEnabled[`${sourceId}/${row.file}`] !== false && row.disabled !== true,
+      shadowed: row.shadowed === true, disabled: row.disabled === true, custom: row.custom === true,
+    }))
+  }
+  for (const s of snapshot.sources) if (s.id !== CUSTOM_SOURCE_ID) s.files = filesOf(s.id)
+  snapshot.sources.push({
+    id: CUSTOM_SOURCE_ID,
+    name: '自定义专家',
+    upstream: '',
+    license: '',
+    installedVersion: VERSION,
+    enabled: true,
+    builtin: false,
+    status: customError ? 'error' : 'ok',
+    statusDetail: customError,
+    lastUpdated: null,
+    custom: true,
+    files: customList.filter(r => !r.deleted).map(r => ({
+      file: `${r.slug}.md`, slug: r.slug, name: r.name, title: null,
+      enabled: r.enabled !== false, custom: true,
+    })),
+  })
+  snapshot.customExperts = customList.filter(r => !r.deleted).map(r => ({
+    slug: r.slug, name: r.name, description: r.description, division: r.division ?? null,
+    emoji: r.emoji ?? null, promptLength: r.prompt.length, enabled: r.enabled !== false,
+  }))
+  if (customError) snapshot.customExpertsError = customError
+
+  return snapshot
+}
+
+/** Enable/disable one source (security review M3). Non-registry sources
+ *  (kind='custom': user-added GitHub repos and local paths) carry third-party
+ *  experts straight into the model context — enabling one the first time
+ *  requires an explicit ack: call again with `ackRisks: true` after the user
+ *  confirmed in the UI. The refusal does NOT mutate anything and does NOT bump
+ *  the revision; the returned snapshot carries a `confirmRequired` marker the
+ *  client renders as a confirmation prompt. After a confirmed enable the
+ *  decision is persisted (`confirmedAt`) and later toggles need no ack. */
+export function remoteSetSourceEnabled(dst, sourceId, enabled, expectedRevision, ackRisks) {
+  assertValidSourceId(sourceId)
+  const state = loadSourcesState(dst)
+  assertRevision(state, expectedRevision)
+  if (sourceId === CORE_SOURCE_ID) {
+    throw new Error('bundled-core is built-in and cannot be disabled or removed')
+  }
+  const entry = state.sources.find(s => s.id === sourceId)
+  if (!entry) {
+    const registry = loadRegistry(dst)
+    if (registry.sources.some(s => s.id === sourceId)) {
+      throw new Error(`source not installed: ${sourceId} — download it first`)
+    }
+    throw new Error(`unknown source: ${sourceId}`)
+  }
+  const enabling = !!enabled
+  if (enabling && entry.kind === 'custom' && !entry.confirmedAt && ackRisks !== true) {
+    const pending = buildSourcesSnapshot(dst)
+    pending.confirmRequired = {
+      id: sourceId,
+      method: 'setSourceEnabled',
+      ackField: 'ackRisks',
+      reason: 'non-registry source: enabling it loads third-party experts into the model context — confirm after reviewing the upstream content',
+    }
+    return pending // refusal marker; state and revision untouched
+  }
+  if (enabling && entry.kind === 'custom') {
+    entry.confirmedAt = new Date().toISOString() // persist the one-time user confirmation
+  }
+  entry.enabled = !!enabled
+  delete entry.status // a user action clears a stale failure marker
+  delete entry.statusDetail
+  commitSourcesState(dst, state)
+  return buildSourcesSnapshot(dst)
+}
+
+export function remoteAddSource(dst, input, expectedRevision) {
+  const state = loadSourcesState(dst)
+  assertRevision(state, expectedRevision)
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('addSource: input must be an object {url, name}')
+  }
+  const url = String(input.url ?? '').trim()
+  const name = String(input.name ?? '').trim().slice(0, 80)
+  if (!url || url.length > 512) throw new Error('addSource: url is required (max 512 chars)')
+  const registry = loadRegistry(dst)
+  let repo = null
+  const gh = GITHUB_REPO_RE.exec(url)
+  if (gh) {
+    repo = `${gh[1]}/${gh[2]}`
+  } else if (!LOCAL_PATH_RE.test(url)) {
+    throw new Error(`addSource: unsupported source url "${url}" — expected a GitHub repository URL or a local path`)
+  }
+  if (repo && (state.sources.some(s => s.upstream?.repo === repo) || registry.sources.some(s => s.upstream.repo === repo))) {
+    throw new Error(`source already available: ${repo}`)
+  }
+  // M1: derive a whitelist-safe id from the repo name / path basename. The
+  // raw derivation could yield '.'/'..' (e.g. url "https://github.com/foo/..")
+  // — that used to produce id=".." and let removeSource rm -rf the whole
+  // preset target directory. Anything not fitting the whitelist is rejected.
+  const baseId = (repo ? repo.split('/')[1] : basename(url))
+    .toLowerCase()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (!SOURCE_ID_RE.test(baseId)) {
+    throw new Error(`addSource: cannot derive a safe source id from "${url.slice(0, 120)}" — refusing (derived id must match /^[a-z0-9][a-z0-9._-]{0,127}$/)`)
+  }
+  let id = baseId
+  let n = 2
+  while (
+    id === CORE_SOURCE_ID || id === LEGACY_SOURCE_ID
+    || state.sources.some(s => s.id === id)
+    || registry.sources.some(s => s.id === id)
+  ) id = `${baseId}-${n++}`
+  state.sources.push({
+    id,
+    name: name || (repo ? repo.split('/')[1] : baseId),
+    enabled: false,
+    kind: 'custom',
+    version: null,
+    sha256: null,
+    upstream: { repo, url, ref: null },
+    lastSync: null,
+    fileCount: 0,
+    status: 'idle',
+    statusDetail: null,
+  })
+  commitSourcesState(dst, state)
+  return buildSourcesSnapshot(dst)
+}
+
+export function remoteRemoveSource(dst, sourceId, expectedRevision) {
+  assertValidSourceId(sourceId) // M1: no '.', '..', no traversal segments
+  const state = loadSourcesState(dst)
+  assertRevision(state, expectedRevision)
+  if (sourceId === CORE_SOURCE_ID) {
+    throw new Error('bundled-core is built-in and cannot be disabled or removed')
+  }
+  if (sourceId === LEGACY_SOURCE_ID) {
+    throw new Error('legacy-adapted is frozen (migrated local experts) and cannot be removed')
+  }
+  const i = state.sources.findIndex(s => s.id === sourceId)
+  if (i < 0) throw new Error(`unknown source: ${sourceId}`)
+  state.sources.splice(i, 1)
+  rmSync(assertSourceDirInside(dst, sourceId), { recursive: true, force: true }) // M1 seatbelt
+  commitSourcesState(dst, state)
+  return buildSourcesSnapshot(dst)
+}
+
+export function remoteSetMirrorPrefixes(dst, prefixes, expectedRevision) {
+  const state = loadSourcesState(dst)
+  assertRevision(state, expectedRevision)
+  if (!Array.isArray(prefixes)) throw new Error('setMirrorPrefixes: prefixes must be an array of strings')
+  const clean = prefixes.map(p => String(p).trim()).filter(p => p !== '')
+  for (const p of clean) {
+    if (!/^https?:\/\//.test(p)) {
+      throw new Error(`setMirrorPrefixes: every prefix must start with http:// or https:// — got "${p.slice(0, 64)}"`)
+    }
+    if (p.length > 256) throw new Error('setMirrorPrefixes: prefix too long (max 256 chars)')
+  }
+  if (clean.length > MAX_MIRROR_PREFIXES) {
+    throw new Error(`setMirrorPrefixes: too many prefixes (max ${MAX_MIRROR_PREFIXES})`)
+  }
+  state.mirrorPrefixes = clean // [] = restore defaults (client contract)
+  commitSourcesState(dst, state)
+  return buildSourcesSnapshot(dst)
+}
+
+// ── T4 dedup choice API (same optimistic lock + mutual exclusion machinery) ─
+
+function assertDedupKey(key, what) {
+  if (typeof key !== 'string' || key.trim() === '' || key.length > 256) {
+    throw new Error(`${what}: key must be a non-empty string (max 256 chars)`)
+  }
+}
+
+/** Pin the representative source for one dedup group (user manual override,
+ *  persisted as sources.json dedup.choice[key]; priority above preferLang and
+ *  the default rules). Same expectedRevision optimistic lock and sources-lock
+ *  as the other mutating methods; a no-op set (choice already equal) does NOT
+ *  bump the revision. Unknown group keys and non-member sourceIds are refused
+ *  (typo protection — the client picks key+sourceId from the current snapshot). */
+export function remoteSetDedupChoice(dst, key, sourceId, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    assertDedupKey(key, 'setDedupChoice')
+    assertValidSourceId(sourceId, 'setDedupChoice sourceId')
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    rebuildMergedView(dst) // hash-guarded: upgrades a stale roster if needed
+    const registry = loadRegistry(dst)
+    const group = computeDedupGroups(dst, state, registry).find(g => g.key === key)
+    if (!group) {
+      throw new Error(`setDedupChoice: unknown dedup group ${JSON.stringify(key.slice(0, 80))} — reload sources and pick a group from the current snapshot`)
+    }
+    if (!group.members.some(m => m.sourceId === sourceId)) {
+      throw new Error(`setDedupChoice: source ${sourceId} is not a member of dedup group ${key.slice(0, 80)}`)
+    }
+    if (state.dedup.choice[key] === sourceId) return buildSourcesSnapshot(dst) // no-op
+    state.dedup.choice[key] = sourceId
+    commitSourcesState(dst, state)
+    rebuildMergedView(dst, { force: true }) // refresh the shadowed annotations
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+/** Restore the default representative rule for one dedup group (remove the
+ *  manual choice). Clearing an already-default key is a no-op that does NOT
+ *  bump the revision. */
+export function remoteClearDedupChoice(dst, key, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    assertDedupKey(key, 'clearDedupChoice')
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    if (!(key in state.dedup.choice)) return buildSourcesSnapshot(dst) // already default
+    delete state.dedup.choice[key]
+    commitSourcesState(dst, state)
+    rebuildMergedView(dst, { force: true })
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+// ── v2.2 custom experts (Agency expert-contract/library semantics, zero-dep) ─
+
+const CUSTOM_EXPERTS_JSON = 'custom-experts.json'
+export const CUSTOM_SOURCE_ID = 'custom'
+const CUSTOM_RANK = 5 // between bundled-core (0), legacy (1) and registry (2+i)
+export const MAX_CUSTOM_EXPERTS = 200
+export const CUSTOM_SLUG_RE = /^custom-[0-9a-f]{8}$/
+const CUSTOM_NAME_RE = /^[^@\u0000-\u001f\u007f]{1,40}$/
+const CUSTOM_DIVISION_RE = /^[a-z][a-z0-9-]{0,63}$/
+
+function customExpertsPath(dst) { return join(sourcesDirOf(dst), CUSTOM_EXPERTS_JSON) }
+
+function loadCustomExperts(dst) {
+  const p = customExpertsPath(dst)
+  if (!existsSync(p)) return []
+  let raw
+  try { raw = readJson(p) } catch (err) {
+    throw new Error(`expert-sources/${CUSTOM_EXPERTS_JSON} is corrupt: ${err.message}`)
+  }
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.customExperts) ? raw.customExperts : null
+  if (!list) throw new Error(`expert-sources/${CUSTOM_EXPERTS_JSON} must be an array or {customExperts: []}`)
+  return list
+}
+
+function saveCustomExpertsAtomic(dst, list) {
+  writeJsonAtomic(customExpertsPath(dst), { customExperts: list })
+}
+
+const CUSTOM_MESSAGES = {
+  invalid: ['请检查名称、简介、分类与提示词（名称 ≤40 字、简介 ≤160 字、提示词 ≤20000 字，名称不得含 @ 或控制字符）。', 'Check name, description, division and prompt (name ≤40, description ≤160, prompt ≤20000 chars; no @ or control characters in the name).'],
+  duplicate: ['专家名称已被使用，请换一个名称。', 'This expert name is already in use. Choose another name.'],
+  limit: ['自定义专家数量已达上限（200 位），请先删除不再使用的专家。', 'The limit of 200 custom experts has been reached. Delete an unused expert first.'],
+  readonly: ['内置与来源专家只读；自定义专家请通过 saveCustom 维护。', 'Built-in and source experts are read-only; maintain custom experts via saveCustom.'],
+  conflict: ['专家状态已被其他窗口修改，请刷新后重试。', 'Expert state was changed in another window. Refresh and retry.'],
+  missing: ['自定义专家不存在或已删除。', 'The custom expert does not exist or is deleted.'],
+}
+function customExpertError(key) {
+  const e = new Error(`${key}: ${CUSTOM_MESSAGES[key][0]} / ${CUSTOM_MESSAGES[key][1]}`)
+  e.key = key
+  return e
+}
+
+function singleGraphemeEmoji(value) {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    if ([...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)].length !== 1) return false
+  } else if (value.length > 8) return false
+  return /\p{Extended_Pictographic}/u.test(value)
+}
+
+function validateCustomExpertInput(input) {
+  const out = {}
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!CUSTOM_NAME_RE.test(name)) throw customExpertError('invalid')
+  const description = typeof input?.description === 'string' ? input.description.trim() : ''
+  if (description.length < 1 || description.length > 160) throw customExpertError('invalid')
+  const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
+  if (prompt.length < 1 || prompt.length > 20_000) throw customExpertError('invalid')
+  out.name = name
+  out.description = description
+  out.prompt = prompt
+  const division = typeof input?.division === 'string' ? input.division.trim() : ''
+  if (division) {
+    if (!CUSTOM_DIVISION_RE.test(division)) throw customExpertError('invalid')
+    out.division = division
+  }
+  const emoji = typeof input?.emoji === 'string' ? input.emoji.trim() : ''
+  if (emoji) {
+    if (!singleGraphemeEmoji(emoji)) throw customExpertError('invalid')
+    out.emoji = emoji
+  }
+  return out
+}
+
+export function remoteSaveCustom(dst, input, enabled, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    if (typeof enabled !== 'boolean') throw customExpertError('invalid')
+    const list = loadCustomExperts(dst)
+    const slug = typeof input?.slug === 'string' && input.slug ? input.slug : `custom-${randomUUID().replace(/-/g, '').slice(0, 8)}`
+    if (!CUSTOM_SLUG_RE.test(slug)) throw customExpertError('invalid')
+    const idx = list.findIndex(r => r.slug === slug)
+    const creating = idx < 0
+    if (!creating && list[idx].deleted) throw customExpertError('missing')
+    const fields = validateCustomExpertInput(input)
+    if (creating && list.filter(r => !r.deleted).length >= MAX_CUSTOM_EXPERTS) throw customExpertError('limit')
+    const norm = normalizeExpertName(fields.name)
+    // Same-name against bundled-core / source-pack experts is ALLOWED on
+    // purpose: the dedup engine groups them (custom rank 5) and the user can
+    // elect a representative — a hard reject would contradict acceptance
+    // ② (custom并入合并视图+与来源包重名去重). Only custom-vs-custom
+    // duplicates are rejected (no distinct provenance to arbitrate).
+    if (list.some(r => r.slug !== slug && !r.deleted && normalizeExpertName(r.name) === norm)) throw customExpertError('duplicate')
+    const now = new Date().toISOString()
+    if (creating) list.push({ slug, ...fields, enabled: enabled === true, createdAt: now, updatedAt: now })
+    else list[idx] = { ...list[idx], ...fields, enabled: enabled === true, updatedAt: now }
+    saveCustomExpertsAtomic(dst, list)
+    commitSourcesState(dst, state)
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+export function remoteDeleteCustom(dst, slug, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    const list = loadCustomExperts(dst)
+    const rec = list.find(r => r.slug === slug && !r.deleted)
+    if (!rec) throw customExpertError('missing')
+    rec.wasEnabled = rec.enabled === true
+    rec.enabled = false
+    rec.deleted = true
+    rec.updatedAt = new Date().toISOString()
+    saveCustomExpertsAtomic(dst, list)
+    commitSourcesState(dst, state)
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+export function getCustomExpert(dst, slug) {
+  const rec = loadCustomExperts(dst).find(r => r.slug === slug && !r.deleted)
+  if (!rec) throw customExpertError('missing')
+  const { deleted: _deleted, wasEnabled: _wasEnabled, ...detail } = rec
+  return detail
+}
+
+/** P7: hard-purge soft-deleted custom records (Agency expert-library
+ *  cleanupDeleted semantics). Restoration 取舍 (documented decision): restore
+ *  = re-create via saveCustom under a NEW slug — the duplicate-name check
+ *  skips deleted records, so the same name is immediately reusable; a
+ *  dedicated restoreCustom RPC is deliberately NOT added because soft-deleted
+ *  records are invisible to the settings panel, so an un-delete entry point
+ *  would have no UI carrier (wasEnabled is a delete-time memory, not a
+ *  resurrection path). cleanup keeps the store from growing without bound.
+ *  No material change (nothing deleted) → revision NOT bumped, matching the
+ *  "choice already equal" convention. Returns the fresh SourcesSnapshot. */
+export function remoteCleanupCustomDeleted(dst, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    const list = loadCustomExperts(dst)
+    const kept = list.filter(r => !r.deleted)
+    if (kept.length !== list.length) {
+      saveCustomExpertsAtomic(dst, kept)
+      commitSourcesState(dst, state)
+    }
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+/** Per-expert enable/disable (CatalogSnapshot granularity). Custom experts are
+ *  toggled through saveCustom's `enabled` flag — refusing here keeps one
+ *  write path per kind of expert. */
+export function remoteSetExpertEnabled(dst, ref, enabled, expectedRevision) {
+  return withSourcesLock(dst, () => {
+    const state = loadSourcesState(dst)
+    assertRevision(state, expectedRevision)
+    if (typeof enabled !== 'boolean') throw customExpertError('invalid')
+    const sourceId = typeof ref?.sourceId === 'string' ? ref.sourceId : ''
+    const file = typeof ref?.file === 'string' ? ref.file : ''
+    if (sourceId === CUSTOM_SOURCE_ID) throw customExpertError('readonly')
+    assertValidSourceId(sourceId, 'setExpertEnabled sourceId')
+    if (sourceId === CORE_SOURCE_ID) {
+      if (!CORE_EXPERTS.includes(file)) throw customExpertError('missing')
+    } else {
+      const dir = join(sourcesDirOf(dst), sourceId)
+      const resolved = resolve(join(dir, file))
+      if (!resolved.startsWith(resolve(dir) + sep)) throw customExpertError('missing')
+      if (!existsSync(resolved)) throw customExpertError('missing')
+    }
+    const key = `${sourceId}/${file}`
+    state.expertEnabled = state.expertEnabled ?? {}
+    const current = state.expertEnabled[key] === false ? false : true
+    if (current === enabled) return buildSourcesSnapshot(dst) // no-op: no revision bump
+    if (enabled) delete state.expertEnabled[key]
+    else state.expertEnabled[key] = false
+    commitSourcesState(dst, state)
+    return buildSourcesSnapshot(dst)
+  })
+}
+
+/** v2.2 read-only persona content accessor (「从来源专家复制为自定义」预填)。
+ *  ref: {sourceId, file} — bundled-core/legacy/registry/user-added sources
+ *  only; the `custom` pseudo-source is refused (own prompts live in
+ *  custom-experts.json → getCustom). Read-only: no expectedRevision, no
+ *  write surface; same seatbelts as setExpertEnabled (M1 seatbelt family). */
+export function getExpertContent(dst, ref) {
+  const sourceId = typeof ref?.sourceId === 'string' ? ref.sourceId : ''
+  const file = typeof ref?.file === 'string' ? ref.file : ''
+  if (sourceId === CUSTOM_SOURCE_ID) throw customExpertError('readonly')
+  assertValidSourceId(sourceId, 'getExpertContent sourceId')
+  let path
+  if (sourceId === CORE_SOURCE_ID) {
+    if (!CORE_EXPERTS.includes(file)) throw customExpertError('missing')
+    path = join(dst, EXPERTS_REL, file)
+  } else {
+    const dir = join(sourcesDirOf(dst), sourceId)
+    const resolved = resolve(join(dir, file))
+    if (!resolved.startsWith(resolve(dir) + sep)) throw customExpertError('missing')
+    if (!existsSync(resolved)) throw customExpertError('missing')
+    path = resolved
+  }
+  return { content: readFileSync(path, 'utf-8') }
+}
+
+/** Install a custom (user-added) source: local path copy or GitHub archive
+ *  with ref discovery (main → master). No pinned sha256 exists for custom
+ *  sources; the security scan is still mandatory before anything lands. */
+async function installCustomSource(dst, entry, channel, opts = {}) {
+  assertValidSourceId(entry?.id, 'custom source id') // M1
+  const url = entry.upstream?.url ?? ''
+  const log = opts.log ?? []
+  let selected = null
+  let staging = null
+  let usedChannel = null
+  let version = null
+  let archiveSha = null
+  let skippedSymlinks = [] // symlink members skipped + recorded (never followed)
+  const cleanup = () => { if (staging) rmSync(staging, { recursive: true, force: true }) }
+
+  if (!entry.upstream?.repo) {
+    const local = url.startsWith('~/') ? join(os.homedir(), url.slice(1)) : url
+    // M2: only real directories are ingested — a symlinked root (or anything
+    // dangling) is refused; inner symlinks are skipped by listFilesRecursive.
+    let lst = null
+    try { lst = lstatSync(local) } catch { /* missing → handled below */ }
+    if (lst && lst.isSymbolicLink()) {
+      throw new Error(`local source path is a symbolic link: ${local} — refused (symlink-injection guard)`)
+    }
+    if (!lst || !lst.isDirectory()) {
+      throw new Error(`download failed: local source path not found or not a directory: ${local}`)
+    }
+    selected = listFilesRecursive(local).filter(f => matchInclude(f.rel, CUSTOM_INCLUDE, CUSTOM_EXCLUDE))
+    skippedSymlinks = collectSkippedSymlinks(local).slice(0, MAX_SKIPPED_SYMLINKS)
+    if (!selected.length) throw new Error(`no .md files matched under ${local}`)
+    usedChannel = 'local'
+    version = 'local'
+  } else {
+    const repo = entry.upstream.repo
+    const refs = entry.upstream.ref ? [entry.upstream.ref] : ['main', 'master']
+    const candidates = []
+    if (channel === 'cdn') {
+      for (const prefix of opts.mirrorPrefixes ?? []) {
+        const p = prefix.endsWith('/') ? prefix : `${prefix}/`
+        for (const ref of refs) {
+          candidates.push({ channel: `mirror:${p}`, url: `${p}https://github.com/${repo}/archive/${ref}.tar.gz`, ref })
+        }
+      }
+    }
+    for (const ref of refs) {
+      candidates.push({ channel: 'direct', url: `https://codeload.github.com/${repo}/tar.gz/${ref}`, ref })
+    }
+    const errors = []
+    let buffer = null
+    for (const c of candidates) {
+      try {
+        log.push(`channel ${c.channel}: ${c.url}`)
+        buffer = await fetchBuffer(c.url)
+        usedChannel = c.channel
+        version = `@${c.ref}`
+        break
+      } catch (err) {
+        errors.push(`${c.channel}: ${err.message}`)
+      }
+    }
+    if (!buffer) throw new Error(`all channels failed for ${entry.id}:\n  ${errors.join('\n  ')}`)
+    archiveSha = sha256OfBuffer(buffer)
+    staging = assertSourceDirInside(dst, `.staging-${entry.id}-${process.pid}`, 'staging dir') // M1
+    rmSync(staging, { recursive: true, force: true })
+    untar(buffer, staging)
+    // Symlink policy (user ruling): archive symlink members are skipped and
+    // recorded — no longer a whole-archive rejection (never followed).
+    let skippedSymlinks = []
+    // M2-edge: lstat (never stat) — wrapped layout = the ONLY top-level member
+    // is a real directory; a symlink-to-dir member is never a root.
+    const unpacked = readdirSync(staging)
+    if (unpacked.length !== 1 || !lstatSync(join(staging, unpacked[0])).isDirectory()) {
+      cleanup()
+      throw new Error(`unexpected archive layout for ${entry.id} (${unpacked.length} top-level entries)`)
+    }
+    const root = join(staging, unpacked[0])
+    skippedSymlinks = collectSkippedSymlinks(root).slice(0, MAX_SKIPPED_SYMLINKS)
+    selected = listFilesRecursive(root)
+      .filter(f => !f.rel.split('/').includes('..'))
+      .filter(f => matchInclude(f.rel, CUSTOM_INCLUDE, CUSTOM_EXCLUDE))
+    if (!selected.length) {
+      cleanup()
+      throw new Error(`no files matched include patterns for ${entry.id}`)
+    }
+  }
+
+  const findings = scanSecurity(selected)
+  if (findings.length) {
+    cleanup()
+    const head = findings.slice(0, 20).map(f => `${f.file}:${f.line} [${f.kind}] ${f.name}`).join('\n  ')
+    throw new Error(`security scan rejected ${entry.id} (${findings.length} finding(s)):\n  ${head}`)
+  }
+
+  const sourceDir = assertSourceDirInside(dst, entry.id) // M1 seatbelt
+  rmSync(sourceDir, { recursive: true, force: true })
+  mkdirSync(sourceDir, { recursive: true })
+  const manifest = {
+    id: entry.id,
+    kind: 'custom',
+    version,
+    license: entry.license ?? '',
+    upstream: entry.upstream?.url ?? '',
+    channel: usedChannel,
+    installedAt: new Date().toISOString(),
+    skippedSymlinks,
+    files: [],
+  }
+  try {
+    for (const f of selected) {
+      const dest = join(sourceDir, f.rel)
+      mkdirSync(dirname(dest), { recursive: true })
+      copyFileSync(f.path, dest)
+      manifest.files.push({
+        path: f.rel,
+        sha256: sha256File(dest),
+        upstreamPath: entry.upstream?.repo ? `${entry.upstream.repo}/${f.rel}@${version}` : null,
+      })
+    }
+    writeJsonAtomic(join(sourceDir, '.source-manifest.json'), manifest)
+  } catch (err) {
+    rmSync(sourceDir, { recursive: true, force: true })
+    throw err
+  } finally {
+    cleanup()
+  }
+
+  const state = loadSourcesState(dst)
+  upsertSource(state, {
+    id: entry.id,
+    enabled: entry.enabled ?? true,
+    kind: 'custom',
+    version,
+    sha256: archiveSha,
+    upstream: entry.upstream,
+    lastSync: new Date().toISOString(),
+    fileCount: manifest.files.length,
+    skippedSymlinks,
+  })
+  saveSourcesState(dst, state)
+  rebuildMergedView(dst, { log })
+  return state.sources.find(s => s.id === entry.id)
+}
+
+/** downloadSource/updateSource shared handler. A failed download records a
+ *  terminal status on the entry (verifyFailed / scanRejected / error) and
+ *  rethrows WITHOUT bumping the revision; a success marks the entry 'ok',
+ *  bumps the revision and rebuilds the merged view.
+ *  Security review M5: the whole sequence spans await boundaries with
+ *  load-modify-save blocks — concurrent downloads could interleave and
+ *  overwrite each other's sources.json (lost registration). Every call is
+ *  therefore serialized through a per-target in-process mutex. */
+const SOURCE_STATE_LOCKS = new Map()
+
+function withSourcesLock(dst, fn) {
+  const key = resolve(String(dst))
+  const prev = SOURCE_STATE_LOCKS.get(key) ?? Promise.resolve()
+  const run = prev.then(fn, fn) // run regardless of the previous outcome
+  SOURCE_STATE_LOCKS.set(key, run.catch(() => {})) // keep the chain alive on errors
+  return run
+}
+
+export function remoteDownloadSource(dst, sourceId, channel, expectedRevision, opts = {}) {
+  return withSourcesLock(dst, () => remoteDownloadSourceLocked(dst, sourceId, channel, expectedRevision, opts))
+}
+
+async function remoteDownloadSourceLocked(dst, sourceId, channel, expectedRevision, opts = {}) {
+  assertValidSourceId(sourceId)
+  const state = loadSourcesState(dst)
+  assertRevision(state, expectedRevision)
+  if (sourceId === CORE_SOURCE_ID) {
+    throw new Error('bundled-core is built-in — there is nothing to download')
+  }
+  const registry = loadRegistry(dst)
+  const regEntry = registry.sources.find(s => s.id === sourceId)
+  const stateEntry = state.sources.find(s => s.id === sourceId)
+  if (!regEntry && !stateEntry) throw new Error(`unknown source: ${sourceId}`)
+  if (stateEntry?.kind === 'legacy-frozen') {
+    throw new Error('legacy-adapted is frozen — download/update is not applicable')
+  }
+  if (channel !== 'github' && channel !== 'cdn') {
+    throw new Error('downloadSource: channel must be "github" or "cdn"')
+  }
+  const mirrorPrefixes = effectiveMirrorPrefixes(registry, state)
+  try {
+    if (regEntry) {
+      await installSource(dst, sourceId, { registry, channel, mirrorPrefixes, ackScan: opts.ackScan === true })
+    } else {
+      await installCustomSource(dst, stateEntry, channel, { mirrorPrefixes })
+    }
+  } catch (err) {
+    // Scan-hit confirmation gate (user ruling): a REGISTRY source whose scan
+    // found hits is not rejected outright — nothing registered, revision
+    // untouched, findings persisted, and a confirmRequired marker returned
+    // carrying the findings (ackField 'ackScan', same shape as the M3 gate).
+    if (err instanceof ScanConfirmationRequired) {
+      recordScanConfirmation(dst, sourceId, err.scanFindings)
+      const pending = buildSourcesSnapshot(dst)
+      pending.confirmRequired = {
+        id: sourceId,
+        method: opts.update ? 'updateSource' : 'downloadSource',
+        ackField: 'ackScan',
+        reason: `security scan hit (${err.scanFindings.length} finding(s)) — nothing was registered; confirm to register with the findings persisted for review`,
+      }
+      // Top-level findings for the client confirm dialog (the strict client
+      // codec strips unknown fields inside confirmRequired; sourcesSnapshot
+      // carries an optional top-level scanFindings as the display fallback).
+      pending.scanFindings = err.scanFindings.slice(0, MAX_SCAN_FINDINGS)
+      return pending
+    }
+    recordSourceFailure(dst, sourceId, err?.message ?? String(err))
+    throw err
+  }
+  const after = loadSourcesState(dst)
+  after.revision = (after.revision ?? 0) + 1
+  const entry = after.sources.find(s => s.id === sourceId)
+  if (entry) {
+    entry.status = 'ok'
+    delete entry.statusDetail
+  }
+  saveSourcesState(dst, after)
+  rebuildMergedView(dst)
+  return buildSourcesSnapshot(dst)
+}
+
+// ── merged stable roster view ───────────────────────────────────────────────
+
+function mergedStateHash(dst) {
+  const hash = crypto.createHash('sha256')
+  // Roster format tag: forces one rebuild after the dedup engine lands, so
+  // pre-dedup rosters (no name/title identities) upgrade themselves. v2 also
+  // forces one rebuild after conflict classification (v2.1.1) so stale
+  // rosters without the `conflicts[].class` field re-classify themselves.
+  hash.update('roster-dedup-v2')
+  const expertsDir = join(dst, EXPERTS_REL)
+  for (const name of CORE_EXPERTS) {
+    const p = join(expertsDir, name)
+    hash.update(name)
+    hash.update(existsSync(p) ? sha256File(p) : 'missing')
+  }
+  const state = loadSourcesState(dst)
+  for (const s of state.sources) {
+    hash.update(s.id)
+    hash.update(String(!!s.enabled))
+    const manifestPath = join(sourcesDirOf(dst), s.id, '.source-manifest.json')
+    hash.update(existsSync(manifestPath) ? sha256File(manifestPath) : 'missing')
+  }
+  // v2.2: per-expert disable map + custom experts alter the merged view
+  hash.update(JSON.stringify(state.expertEnabled ?? {}))
+  const customsPath = customExpertsPath(dst)
+  hash.update(existsSync(customsPath) ? sha256File(customsPath) : 'missing')
+  return hash.digest('hex')
+}
+
+/**
+ * Rebuild expert-sources/merged/: the stable roster view.
+ *   merged/bundled-core/<core>.md                — always present (11 core)
+ *   merged/<source-id>/<upstream-relative-path>  — enabled sources, raw files
+ * Cross-source basename collisions coexist per source dir and are annotated
+ * in merged/roster.json (source provenance per file).
+ */
+export function rebuildMergedView(dst, opts = {}) {
+  const state = loadSourcesState(dst)
+  const want = typeof opts.force === 'boolean' ? opts.force : state.mergedStateHash !== mergedStateHash(dst)
+  if (!want) return { skipped: true }
+
+  const merged = mergedDirOf(dst)
+  rmSync(merged, { recursive: true, force: true })
+  mkdirSync(merged, { recursive: true })
+
+  const roster = { generatedAt: new Date().toISOString(), rosterFormat: 2, core: [], sources: [], conflicts: [] }
+  const byBasename = new Map()
+  const dedupEntries = []
+
+  // bundled-core: always present
+  const coreDir = join(merged, CORE_SOURCE_ID)
+  mkdirSync(coreDir, { recursive: true })
+  const expertsDir = join(dst, EXPERTS_REL)
+  const expertEnabled = state.expertEnabled ?? {}
+  for (const name of CORE_EXPERTS) {
+    const src = join(expertsDir, name)
+    if (!existsSync(src)) continue
+    copyFileSync(src, join(coreDir, name))
+    const identity = parseExpertIdentity(readFileSync(src, 'utf-8'))
+    const row = { source: CORE_SOURCE_ID, file: name, sha256: sha256File(src), name: identity.name, title: identity.title }
+    if (expertEnabled[`${CORE_SOURCE_ID}/${name}`] === false) row.disabled = true
+    roster.core.push(row)
+    if (!row.disabled) {
+      dedupEntries.push({ sourceId: CORE_SOURCE_ID, file: name, name: identity.name, title: identity.title, rank: 0 })
+      byBasename.set(name, [{ source: CORE_SOURCE_ID, path: `${CORE_SOURCE_ID}/${name}` }])
+    }
+  }
+
+  // enabled sources
+  const registry = loadRegistry(dst)
+  for (const s of state.sources) {
+    if (!s.enabled) continue
+    assertValidSourceId(s.id) // M1: id becomes a path segment under merged/
+    const sourceDir = assertSourceDirInside(dst, s.id)
+    const files = listFilesRecursive(sourceDir).filter(f => f.rel !== '.source-manifest.json' && f.rel.endsWith('.md'))
+    const rows = []
+    for (const f of files) {
+      const dest = join(merged, s.id, f.rel)
+      mkdirSync(dirname(dest), { recursive: true })
+      copyFileSync(f.path, dest)
+      const identity = parseExpertIdentity(readFileSync(f.path, 'utf-8'))
+      const row = { source: s.id, file: f.rel, sha256: sha256File(f.path), name: identity.name, title: identity.title }
+      if (expertEnabled[`${s.id}/${f.rel}`] === false) row.disabled = true
+      rows.push(row)
+      if (!row.disabled) {
+        dedupEntries.push({ sourceId: s.id, file: f.rel, name: identity.name, title: identity.title, rank: sourceRank(state, registry, s.id) })
+        const base = basename(f.rel)
+        if (!byBasename.has(base)) byBasename.set(base, [])
+        byBasename.get(base).push({ source: s.id, path: `${s.id}/${f.rel}` })
+      }
+    }
+    roster.sources.push({ id: s.id, version: s.version, fileCount: rows.length, files: rows })
+  }
+
+  // v2.2 custom experts: user-authored personas materialized as
+  // merged/custom/<slug>.md (rank 5, between bundled-core and registry
+  // sources). Disabled customs stay on disk with roster `disabled: true`
+  // but are excluded from dedup arbitration; prompts are user-authored
+  // (trusted) content — no third-party scan applies.
+  const customRows = []
+  let customs
+  try { customs = loadCustomExperts(dst) } catch (err) {
+    console.warn(`[dsh-expert-orchestrator] ${err.message}`)
+    customs = []
+  }
+  for (const rec of customs) {
+    if (rec.deleted) continue
+    const dest = join(merged, CUSTOM_SOURCE_ID, `${rec.slug}.md`)
+    mkdirSync(dirname(dest), { recursive: true })
+    // JSON.stringify quotes the scalars — a `: ` inside a name/description
+    // cannot break the frontmatter (PR #5382 YAML lesson).
+    writeFileSync(dest, `---\nname: ${JSON.stringify(rec.name)}\ndescription: ${JSON.stringify(rec.description)}\n---\n\n${rec.prompt}\n`)
+    const row = { source: CUSTOM_SOURCE_ID, file: `${rec.slug}.md`, slug: rec.slug, sha256: sha256File(dest), name: rec.name, title: null, custom: true }
+    if (rec.enabled === false) row.disabled = true
+    customRows.push(row)
+    if (!row.disabled) {
+      dedupEntries.push({ sourceId: CUSTOM_SOURCE_ID, file: `${rec.slug}.md`, name: rec.name, title: null, rank: CUSTOM_RANK })
+      const base = `${rec.slug}.md`
+      if (!byBasename.has(base)) byBasename.set(base, [])
+      byBasename.get(base).push({ source: CUSTOM_SOURCE_ID, path: `${CUSTOM_SOURCE_ID}/${base}` })
+    }
+  }
+  if (customRows.length) roster.sources.push({ id: CUSTOM_SOURCE_ID, version: VERSION, fileCount: customRows.length, files: customRows })
+
+  // T4 dedup: elect representatives and annotate non-representative members
+  // `shadowed: true` (undefined elsewhere, so JSON.stringify drops the field).
+  // Nothing is deleted — files stay on disk in their own source directories.
+  const dedupGroups = buildDedupGroups(dedupEntries, {
+    choice: state.dedup?.choice ?? {},
+    preferLang: preferLangOf(state, registry),
+  })
+  const repKeys = new Set(dedupGroups.map(g => `${g.representative.sourceId}\u0000${g.representative.file}`))
+  const shadowed = new Set()
+  for (const g of dedupGroups) {
+    for (const m of g.members) {
+      const k = `${m.sourceId}\u0000${m.file}`
+      if (!repKeys.has(k)) shadowed.add(k)
+    }
+  }
+  const annotate = row => {
+    if (shadowed.has(`${row.source}\u0000${row.file}`)) row.shadowed = true
+  }
+  roster.core.forEach(annotate)
+  for (const src of roster.sources) src.files.forEach(annotate)
+  roster.dedupGroups = dedupGroups
+  roster.dedup = { preferLang: preferLangOf(state, registry), choice: { ...(state.dedup?.choice ?? {}) } }
+
+  // Basename collisions are classified against the dedup engine (2026-09-18
+  // user ruling): 'resolved-by-dedup' and 'basename-only' carry no summon
+  // ambiguity and must NOT alarm; only 'unresolved' stays on the alarm
+  // surface (the snapshot filters to that class; roster keeps the full
+  // record with its class for auditability).
+  const groupKeyOf = (sourceId, file) => {
+    for (const g of dedupGroups) {
+      if (g.members.some(m => m.sourceId === sourceId && m.file === file)) return g.key
+    }
+    return null
+  }
+  const materialOf = (sourceId, file) => {
+    const e = dedupEntries.find(e => e.sourceId === sourceId && e.file === file)
+    return e ? (normalizeExpertName(e.name) || normalizeExpertName(e.title) || null) : null
+  }
+  roster.conflicts = [...byBasename.entries()]
+    .filter(([, occ]) => occ.length > 1)
+    .map(([name, occ]) => ({
+      basename: name,
+      // occurrences carry {source, path}; the classifier contract expects
+      // {sourceId, file} — file is the path minus the '<sourceId>/' prefix.
+      class: classifyBasenameConflict(
+        occ.map(o => ({ sourceId: o.source, file: o.path.slice(o.source.length + 1) })),
+        groupKeyOf,
+        materialOf,
+      ),
+      occurrences: occ,
+    }))
+
+  writeJsonAtomic(join(merged, 'roster.json'), roster)
+
+  state.mergedStateHash = mergedStateHash(dst)
+  saveSourcesState(dst, state)
+  return { skipped: false, fileCount: roster.core.length + roster.sources.reduce((n, s) => n + s.fileCount, 0), conflicts: roster.conflicts.length }
+}
+
+export function readMergedRoster(dst) {
+  const p = join(mergedDirOf(dst), 'roster.json')
+  if (!existsSync(p)) throw new Error('merged view not built yet')
+  return readJson(p)
+}
+
+// ── legacy migration (apply-time) ───────────────────────────────────────────
+
+/**
+ * Migrate legacy non-core experts out of experts/ into
+ * expert-sources/legacy-adapted/ (frozen local source, enabled by default).
+ * Idempotent: after migration experts/ holds only bundled core; re-runs are
+ * no-ops. Nothing is deleted — files are moved, the ledger records them.
+ */
+export function migrateLegacyExperts(dst, opts = {}) {
+  const log = opts.log || []
+  const expertsDir = join(dst, EXPERTS_REL)
+  if (!existsSync(expertsDir)) return { moved: 0 }
+  const legacyDir = join(sourcesDirOf(dst), LEGACY_SOURCE_ID)
+  const moved = []
+  for (const name of readdirSync(expertsDir).sort()) {
+    if (!name.endsWith('.md')) continue
+    if (CORE_EXPERTS.includes(name)) continue
+    const src = join(expertsDir, name)
+    mkdirSync(legacyDir, { recursive: true })
+    renameSync(src, join(legacyDir, name))
+    moved.push(name)
+  }
+  if (!moved.length && existsSync(join(legacyDir, '.source-manifest.json'))) {
+    return { moved: 0 } // fully migrated on a previous apply — nothing to do
+  }
+  if (moved.length) log.push(`migrated ${moved.length} legacy expert(s) -> ${LEGACY_SOURCE_ID}/`)
+
+  const state = loadSourcesState(dst)
+  const already = state.sources.find(s => s.id === LEGACY_SOURCE_ID)
+  const files = listFilesRecursive(legacyDir).filter(f => f.rel.endsWith('.md'))
+  if (!files.length) return { moved: moved.length }
+  const ledger = {
+    id: LEGACY_SOURCE_ID,
+    enabled: already?.enabled ?? true,
+    kind: 'legacy-frozen',
+    version: 'legacy-1.5.0-frozen',
+    sha256: sha256OfBuffer(Buffer.from(files.map(f => `${f.rel}:${sha256File(f.path)}`).join('\n'), 'utf-8')),
+    upstream: null,
+    lastSync: new Date().toISOString(),
+    fileCount: files.length,
+  }
+  upsertSource(state, ledger)
+  writeJsonAtomic(join(legacyDir, '.source-manifest.json'), {
+    id: LEGACY_SOURCE_ID,
+    kind: 'legacy-frozen',
+    note: 'Adapted copies migrated from the pre-2.0 bundled experts/ (frontmatter adaptation layer only; upstream bodies byte-identical per T1 diff). Frozen as-of migration.',
+    migratedAt: new Date().toISOString(),
+    files: files.map(f => ({ path: f.rel, sha256: sha256File(f.path), upstreamPath: null })),
+  })
+  saveSourcesState(dst, state)
+  return { moved: moved.length, registered: ledger }
+}
+
+// ── deploy (unchanged semantics + sources runtime) ──────────────────────────
+
+function copyIfMissing(src, dst, log) {
+  if (existsSync(dst)) return false
+  mkdirSync(dirname(dst), { recursive: true })
+  copyFileSync(src, dst)
+  log.push(`+ ${dst}`)
+  return true
+}
+
+function deployDir(srcDir, dstDir, log) {
+  for (const name of readdirSync(srcDir)) {
+    const s = join(srcDir, name)
+    const d = join(dstDir, name)
+    if (statSync(s).isDirectory()) {
+      deployDir(s, d, log)
+    } else {
+      copyIfMissing(s, d, log)
+    }
+  }
+}
+
+/** Refresh copy: recursive overwrite — unlike deployDir's copyIfMissing it does not skip existing files; never removes extra target-side files. */
+function refreshDir(srcDir, dstDir, log) {
+  for (const name of readdirSync(srcDir)) {
+    const s = join(srcDir, name)
+    const d = join(dstDir, name)
+    if (statSync(s).isDirectory()) {
+      refreshDir(s, d, log)
+    } else {
+      mkdirSync(dirname(d), { recursive: true })
+      copyFileSync(s, d)
+      log.push(`~ ${d}`)
+    }
+  }
+}
+
+function refreshEntry(rel, dst, log) {
+  const s = join(PKG_ROOT, rel)
+  const d = join(dst, rel)
+  if (statSync(s).isDirectory()) refreshDir(s, d, log)
+  else {
+    mkdirSync(dirname(d), { recursive: true })
+    copyFileSync(s, d)
+    log.push(`~ ${d}`)
+  }
+}
+
+export default {
+  name: PRESET_ID,
+  // cordis 门禁：未声明 inject 的插件访问服务即抛 "cannot get property ... without
+  // inject"（2026-09-19 召唤链路全断根因一）。registerExpertTools/引导段注册共触及
+  // 三个 service：tools（召唤工具注册进全局层）、subagents（spawn 发射专家）、
+  // systemPrompt（tools.js:379 引导段——typeof 守卫挡不住 cordis 属性访问门禁，
+  // 2026-09-21 首轮重启实测漏声明即中止于此）。
+  // agentPresets 刻意**不**声明（T10，dsh-expert-alpha4）：cordis inject 是硬
+  // 依赖（Fiber._refresh 缺任一声明项即拒载）——≤alpha.2 宿主无 agent-presets
+  // 服务，声明会让本插件整体拒载。preset 通道经 lib/summon-preset.js
+  // agentPresetsService 的注入式面（ctx.get —— reflect.get mixin，无 inject
+  // 要求）获取；属性面直取在未声明 inject 时会 throw（真机 summon fail 根因）。
+  inject: ['tools', 'subagents', 'systemPrompt'],
+  apply(ctx, config = {}) {
+    const dst = targetDir(config)
+    ctx.inject(['agentPresets'], (child) => {
+      const presets = child.agentPresets
+      if (typeof presets.registerRestorer === 'function') {
+        child.effect(() => presets.registerRestorer(id => readSummonPreset(dst, id)))
+      }
+    })
+    mkdirSync(dst, { recursive: true })
+    const log = []
+
+    const markerPath = join(dst, MARKER)
+    const deployed = existsSync(markerPath) ? readFileSync(markerPath, 'utf-8').trim() : ''
+    if (deployed !== DEPLOY_REV) {
+      for (const rel of PROTOCOL) refreshEntry(rel, dst, log)
+      writeFileSync(markerPath, DEPLOY_REV)
+    }
+
+    for (const rel of USER_DATA) {
+      const s = join(PKG_ROOT, rel)
+      const d = join(dst, rel)
+      if (statSync(s).isDirectory()) deployDir(s, d, log)
+      else copyIfMissing(s, d, log)
+    }
+
+    // T2 source-management runtime: migrate legacy experts, then keep the
+    // merged stable roster view in sync. Both are idempotent. A missing
+    // roster is always built — on a profile that never touched sources (no
+    // sources.json yet) and after the derived merged/ directory was removed —
+    // so the bundled core experts are summonable, and listed in the composer
+    // picker, from the first launch instead of only after a source download.
+    const migration = migrateLegacyExperts(dst, { log })
+    if (!existsSync(join(mergedDirOf(dst), 'roster.json'))) {
+      rebuildMergedView(dst, { log, force: true })
+    } else if (migration.registered || existsSync(sourcesJsonPath(dst))) {
+      rebuildMergedView(dst, { log })
+    }
+
+    // v2.3 自有召唤工具（list_experts / summon_expert(s)）：读取合并花名册、
+    // persona 注入式白纸召唤、toolFilter 递归防护。注册失败降级为 console.error
+    // ——本插件还承担 preset 部署职责，不因工具注册失败而崩溃循环（此处刻意
+    // 偏离 Agency 的 fail-fast，见 docs/expert-tools-design.md）。apply 保持
+    // 同步（不得返回 thenable 之外的意外形态），工具注册走 fire-and-forget。
+    import('./tools.js')
+      .then(({ registerExpertTools }) =>
+        registerExpertTools(ctx, {
+          dst,
+          providerName: config.expertTools?.provider ?? 'spawn',
+          // WP-8 ①: host settings-page knob (lib/host-settings.js). Raw value:
+          // a Volatile reference when the host edits it live, a plain boolean
+          // otherwise, or undefined when the knob is absent — tools.js reads
+          // it per summon, so a volatile edit takes effect without a reload.
+          autoClaim: config.autoClaim,
+          getExpertContent,
+        }),
+      )
+      .catch((err) => {
+        console.error('[dsh-expert-orchestrator] expert tools unavailable:', err?.message ?? err)
+      })
+
+    console.log(`[dsh-expert-orchestrator] preset ready at ${dst} (deploy ${DEPLOY_REV})`)
+    if (log.length) console.log('[dsh-expert-orchestrator] ' + log.join('\n[dsh-expert-orchestrator] '))
+    if (migration.moved) console.log(`[dsh-expert-orchestrator] legacy migration: moved ${migration.moved}`)
+    // NOTE: apply 不得返回普通对象——宿主 cordis _execute 只接受 undefined /
+    // dispose 函数 / thenable / (async) iterable，其余值抛 "Invalid effect"
+    // （cordis/lib/index.js _execute 末尾 else throw）。迁移与路径信息经 log 输出。
+  },
+}

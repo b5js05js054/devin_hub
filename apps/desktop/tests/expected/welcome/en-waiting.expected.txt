@@ -1,7 +1,0 @@
-DevinHub
-DevinHub
-Browser didn’t open automatically?
-Copy the sign-in link and open it in your browser to sign in.
-Copy sign-in link
-Completing sign in… [disabled]
-Cancel

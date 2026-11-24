@@ -1,0 +1,105 @@
+/* Centred under the window's top strip. The overlay layer spans the frame and
+   ignores its padding, so the shared overlay inset clears the caption row; a
+   plain browser page has no such row and takes the fallback. */
+.banner {
+  --tone: var(--dsw-alias-state-business-primary);
+  position: absolute;
+  top: var(--dsh-frame-overlay-top, 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  /* An absolute box with `left` set shrinks to fit the space right of `left`,
+     so the width is taken from the text and capped against the window. */
+  width: max-content;
+  min-width: min(320px, calc(100% - 48px));
+  max-width: min(560px, calc(100% - 48px));
+  padding: 12px 12px 12px 18px;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.6;
+  /* On macOS the banner may cover a window drag row; it must take the pointer itself. */
+  -webkit-app-region: no-drag;
+  animation: dsh-relay-announcement-in 160ms ease-out;
+}
+
+/* The level bar on the leading edge, as the operator's preview draws it. */
+.banner::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--tone);
+}
+
+.banner[data-level='success'] { --tone: var(--dsw-alias-state-success-primary); }
+.banner[data-level='warning'] { --tone: var(--dsw-alias-state-warn-primary); }
+.banner[data-level='error'] { --tone: var(--dsw-alias-state-error-primary); }
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  display: block;
+  color: var(--tone);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The operator's line breaks are kept; a long announcement scrolls inside the banner. */
+.content {
+  max-height: min(40vh, 240px);
+  margin: 2px 0 0;
+  overflow-y: auto;
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+@keyframes dsh-relay-announcement-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner {
+    animation: none;
+  }
+}

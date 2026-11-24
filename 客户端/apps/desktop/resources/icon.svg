@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- BaiLan application artwork: a peak wrapped in white mist at dawn. Square and full-bleed; icon-windows.svg and icon-macos.svg clip the same drawing to their tiles. The tray-glyph group holds the scenery that the Windows tray renderer enlarges. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1C1684"/>
+      <stop offset=".3" stop-color="#3848E8"/>
+      <stop offset=".5" stop-color="#6F80FF"/>
+      <stop offset=".62" stop-color="#B49CF4"/>
+      <stop offset=".73" stop-color="#F2B2CC"/>
+      <stop offset="1" stop-color="#FFD8CC"/>
+    </linearGradient>
+    <radialGradient id="halo" gradientUnits="userSpaceOnUse" cx="512" cy="430" r="450">
+      <stop offset="0" stop-color="#fff" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="512" cy="770" r="430">
+      <stop offset="0" stop-color="#FFCDBE" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#FFCDBE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="far" gradientUnits="userSpaceOnUse" x1="0" y1="570" x2="0" y2="800">
+      <stop offset="0" stop-color="#7C84F0"/>
+      <stop offset="1" stop-color="#CDB2F0"/>
+    </linearGradient>
+    <linearGradient id="shade" gradientUnits="userSpaceOnUse" x1="0" y1="204" x2="0" y2="880">
+      <stop offset="0" stop-color="#151048"/>
+      <stop offset="1" stop-color="#2C2690"/>
+    </linearGradient>
+    <linearGradient id="lit" gradientUnits="userSpaceOnUse" x1="0" y1="204" x2="0" y2="880">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".3" stop-color="#F3F1FF"/>
+      <stop offset=".72" stop-color="#C2BEFF"/>
+      <stop offset="1" stop-color="#A3A6FF"/>
+    </linearGradient>
+    <linearGradient id="mist-a" gradientUnits="userSpaceOnUse" x1="-30" y1="0" x2="650" y2="0">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".56" stop-color="#fff"/>
+      <stop offset=".84" stop-color="#fff" stop-opacity=".7"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mist-b" gradientUnits="userSpaceOnUse" x1="1054" y1="0" x2="530" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity=".95"/>
+      <stop offset=".55" stop-color="#fff" stop-opacity=".9"/>
+      <stop offset=".85" stop-color="#fff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mist-c" gradientUnits="userSpaceOnUse" x1="-30" y1="0" x2="470" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity=".6"/>
+      <stop offset=".6" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fog" gradientUnits="userSpaceOnUse" x1="0" y1="716" x2="0" y2="1024">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".08" stop-color="#fff" stop-opacity=".12"/>
+      <stop offset=".16" stop-color="#fff" stop-opacity=".3"/>
+      <stop offset=".25" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset=".34" stop-color="#fff" stop-opacity=".68"/>
+      <stop offset=".43" stop-color="#fff" stop-opacity=".82"/>
+      <stop offset=".52" stop-color="#fff" stop-opacity=".92"/>
+      <stop offset=".6" stop-color="#fff" stop-opacity=".98"/>
+      <stop offset=".68" stop-color="#F8F9FF"/>
+      <stop offset="1" stop-color="#B6BFFF"/>
+    </linearGradient>
+    <filter id="mist-shadow" filterUnits="userSpaceOnUse" x="-64" y="400" width="1152" height="500" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dy="16" result="blur"/>
+      <feFlood flood-color="#120E52" flood-opacity=".3"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#sky)"/>
+  <rect width="1024" height="1024" fill="url(#halo)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <g fill="#fff">
+    <circle cx="212" cy="190" r="6" opacity=".85"/>
+    <circle cx="318" cy="112" r="3.8" opacity=".6"/>
+    <circle cx="806" cy="168" r="5.5" opacity=".75"/>
+    <circle cx="902" cy="296" r="3.4" opacity=".5"/>
+    <circle cx="700" cy="92" r="3.4" opacity=".5"/>
+    <circle cx="120" cy="330" r="3.2" opacity=".45"/>
+  </g>
+  <g id="tray-glyph">
+    <path d="M-30 708L84 664Q100 658 116 666L168 684L300 604H640L742 596Q762 570 784 594L850 668L916 614Q932 602 948 616L1054 716V1054H-30Z" fill="url(#far)" fill-opacity=".85"/>
+    <path d="M96 1040L392 404L484 232Q500 204 517 230L602 392L650 422L960 1040Z" fill="url(#shade)"/>
+    <path d="M96 1040L392 404L484 232Q492 218 500.2 217.5L540 368L478 486L536 660L500 900V1040Z" fill="url(#lit)"/>
+    <path d="M478 486L211.4 792L96 1040H500V900L536 660Z" fill="#A3A6FF" fill-opacity=".32"/>
+    <path d="M602 392L650 422L759.4 640L690 590Z" fill="#fff" fill-opacity=".08"/>
+    <g filter="url(#mist-shadow)">
+      <path d="M-30 536C70 520 170 552 290 540C400 530 520 536 650 566C540 600 420 592 300 604C180 616 80 596-30 612Z" fill="url(#mist-a)"/>
+      <path d="M1054 668C960 654 860 688 750 674C680 666 610 674 530 698C620 724 700 714 790 722C890 732 970 710 1054 724Z" fill="url(#mist-b)"/>
+    </g>
+    <path d="M-30 648C60 640 150 658 250 650C330 644 400 650 470 664C400 678 320 674 240 680C150 686 60 674-30 682Z" fill="url(#mist-c)"/>
+    <rect y="700" width="1024" height="324" fill="url(#fog)"/>
+  </g>
+</svg>

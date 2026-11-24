@@ -1,0 +1,87 @@
+{
+  "name": "bailan-expert-orchestrator",
+  "description": "白岚专家提供 — multi-agent orchestration agent preset for DeepSeek Harness (dsh): triage → PM planning → delegate implementation to domain experts via a merged roster (summon_expert), dependency-DAG taskboard, file message bus, tiered delivery gates, experience pooling. 专家编排模式：多智能体任务编排，分诊、PM 先行规划、专家委派、依赖 DAG 任务板、消息总线并行落盘、分级交付门禁、经验池沉淀。",
+  "version": "2.9.8",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.mjs\""
+  },
+  "engines": {
+    "node": ">=21",
+    "dsh": ">=0.1.7-alpha.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-0 <0.3.0-0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis",
+    "deepseek",
+    "plugin",
+    "agent-preset",
+    "multi-agent",
+    "multi-agent-orchestration",
+    "orchestration",
+    "orchestrator",
+    "expert-orchestrator",
+    "expert-agents",
+    "subagent",
+    "subagents",
+    "agent-team",
+    "task-delegation",
+    "taskboard",
+    "message-bus",
+    "ai-agents",
+    "coding-agent",
+    "专家编排",
+    "专家模式",
+    "多智能体",
+    "智能体",
+    "编排",
+    "委派",
+    "任务板",
+    "插件"
+  ],
+  "files": [
+    "lib",
+    "skills",
+    "expert-lessons",
+    "expert-methods",
+    "agent.cordis.yml",
+    "preset.yml",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "locale"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.6-alpha.1 <0.1.7-0 || >=0.1.7-alpha.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-0 <0.3.0-0"
+  }
+}

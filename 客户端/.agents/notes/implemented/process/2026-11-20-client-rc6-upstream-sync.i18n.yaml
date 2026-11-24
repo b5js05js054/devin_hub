@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-20-client-rc6-upstream-sync.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-11-20-client-rc6-upstream-sync.md
+/agent-note-client-owned-versions-for-upstream-syncs:
+  en: 2ef7a3838a5316f1
+  zh: 04b9ce1ab732b30d
+/agent-note-client-owned-versions-for-upstream-syncs/problem:
+  en: 0d4db0990782db9f
+  zh: 2a5bbde963f447f7
+/agent-note-client-owned-versions-for-upstream-syncs/decision:
+  en: febf01c85b123526
+  zh: 4c8beb6834a6fa6d
+/agent-note-client-owned-versions-for-upstream-syncs/decision/included-in-0-2-2-rc-6:
+  en: 7ca99e6f409f0c19
+  zh: e9b3b5a2baf69e84
+/agent-note-client-owned-versions-for-upstream-syncs/decision/excluded-from-0-2-2-rc-6:
+  en: bebfba721171cda0
+  zh: 7e1bd7a5e5496621
+/agent-note-client-owned-versions-for-upstream-syncs/decision/scope-of-0-2-2-rc-7:
+  en: b82bc32e527182b8
+  zh: d27bfd94b0e8a28d
+/agent-note-client-owned-versions-for-upstream-syncs/alternatives-considered:
+  en: 9a4431b9c36a5e8f
+  zh: 1261f1ba89de54ea
+/agent-note-client-owned-versions-for-upstream-syncs/consequences:
+  en: 521ea60cc609eea5
+  zh: 7d4470546d2e7401

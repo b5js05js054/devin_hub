@@ -1,0 +1,109 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/browser-use/tool-browser/README.md
+/:
+  en: f38828caca197da2
+  zh: 0ee7e52d81cc6cbf
+/deepseek-ai-dsh-tool-browser:
+  en: 4a7d53554134f13d
+  zh: c2b721726660bff9
+/deepseek-ai-dsh-tool-browser/summary:
+  en: 43f93bba0628e7f2
+  zh: 60bc0dea6beeb7b8
+/deepseek-ai-dsh-tool-browser/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-tool-browser/use-this-package:
+  en: b0b9b4e65aa363ef
+  zh: 8cbf19ee438ee44c
+/deepseek-ai-dsh-tool-browser/use-this-package/call-the-tool:
+  en: ce2ae18e9490d6cc
+  zh: eab865bb7f294a87
+/deepseek-ai-dsh-tool-browser/use-this-package/commands:
+  en: f77daf20d473e8b6
+  zh: 7ea609f063d44f71
+/deepseek-ai-dsh-tool-browser/use-this-package/session-browser:
+  en: 9d9960aa1d29e978
+  zh: 95989733d01aca24
+/deepseek-ai-dsh-tool-browser/use-this-package/saved-files:
+  en: c371af4017e9a281
+  zh: 6a906d07fa4fda50
+/deepseek-ai-dsh-tool-browser/use-this-package/errors:
+  en: fa02977a978f05de
+  zh: e3b3ec014c1e0be9
+/deepseek-ai-dsh-tool-browser/understand-the-implementation:
+  en: ce7e776e9d516bdb
+  zh: 249760e7e808f275
+/deepseek-ai-dsh-tool-browser/understand-the-implementation/design-concept:
+  en: bbd955a36e73b76f
+  zh: a5799674bd355864
+/deepseek-ai-dsh-tool-browser/understand-the-implementation/source-map:
+  en: c8e497488022968b
+  zh: 6df5d99e5a7df183
+/deepseek-ai-dsh-tool-browser/understand-the-implementation/behavior-notes:
+  en: dcb73ae98ea6b89c
+  zh: 79863dc1fe675543
+/deepseek-ai-dsh-tool-browser/further-exploration:
+  en: 2bc3d17f04cb6316
+  zh: 597e76358da95917
+/deepseek-ai-dsh-tool-browser/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt:
+  en: cf78b9dd5596495f
+  zh: bd44560f8c2435e8
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt/what-the-model-sees:
+  en: ba3cbff284ee3083
+  zh: 2c64d6f7449b6a7c
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt/what-the-model-sees/browser-guidance:
+  en: 447707eaa4bb11f2
+  zh: 27f4302df88c7191
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt/token-effect:
+  en: 88f6b59145a2ea14
+  zh: 62581c85c59f341f
+/deepseek-ai-dsh-tool-browser/model-experience/system-prompt/kv-cache-effect:
+  en: 335a8ad3cc86f364
+  zh: 681e219ef153ac2f
+/deepseek-ai-dsh-tool-browser/model-experience/tool-schema:
+  en: e4c7376d4f29dbd5
+  zh: 6b7a9eaf69c9ea53
+/deepseek-ai-dsh-tool-browser/model-experience/tool-schema/what-the-model-sees:
+  en: 42ad837a0c0c7f1c
+  zh: 75df79d13334ecf2
+/deepseek-ai-dsh-tool-browser/model-experience/tool-schema/token-effect:
+  en: 97cce067584eadff
+  zh: d039320fce2f62df
+/deepseek-ai-dsh-tool-browser/model-experience/tool-schema/kv-cache-effect:
+  en: beb9dd3e5922a22a
+  zh: 9f2d587f3d044620
+/deepseek-ai-dsh-tool-browser/model-experience/results:
+  en: 8e1b2953471f22ba
+  zh: 765a7c4655654c0a
+/deepseek-ai-dsh-tool-browser/model-experience/results/what-the-model-sees:
+  en: e1393e670b931adf
+  zh: 81d85adc2ce7c511
+/deepseek-ai-dsh-tool-browser/model-experience/results/token-effect:
+  en: a9bb06f209ad07b0
+  zh: fed1a88b34148212
+/deepseek-ai-dsh-tool-browser/model-experience/results/kv-cache-effect:
+  en: a070c0afa0aada0e
+  zh: fddd394d1d65ddff
+/deepseek-ai-dsh-tool-browser/model-experience/tool-errors:
+  en: 2d4f2c8605eccab3
+  zh: 67f1f0218f73c6bf
+/deepseek-ai-dsh-tool-browser/model-experience/tool-errors/what-the-model-sees:
+  en: 062395f4a2854a84
+  zh: 261cd40be8831103
+/deepseek-ai-dsh-tool-browser/model-experience/tool-errors/token-effect:
+  en: 681cadd5be7b8ac1
+  zh: 7918a6cf1f73f411
+/deepseek-ai-dsh-tool-browser/model-experience/tool-errors/kv-cache-effect:
+  en: f5d5f97a153f7c70
+  zh: 01fdbf5a7b98a1e4
+/deepseek-ai-dsh-tool-browser/known-limitations-and-deferred-work:
+  en: 5d7490f7f6738525
+  zh: 20af21b84c9d08ba
+/deepseek-ai-dsh-tool-browser/known-limitations-and-deferred-work/dev-note:
+  en: aec6bd0848f6a46d
+  zh: f77ac351f30972cf

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.6/relay-account-assets/guide.md
+/:
+  en: 6e91a8ba08972145
+  zh: 988a2ad2ed4e574d
+/relay-account-asset-ownership:
+  en: 6d49a2f5ec9fbfdb
+  zh: c4284df10e762e38
+/relay-account-asset-ownership/change:
+  en: 2eae80d7b02bfe09
+  zh: 2921f0b99f6a3974
+/relay-account-asset-ownership/migration:
+  en: ef89780c54173697
+  zh: f4394dd34537afe3

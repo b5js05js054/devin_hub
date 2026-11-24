@@ -1,0 +1,22 @@
+- banner:
+  - navigation "Session hierarchy": Reply with a one-sentence description
+  - text: Standard mode
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+- text: Reply with a one-sentence description of event sourcing, then stop. {{clock}}
+- button "Copy"
+- status: Failed
+- button "Failed" [disabled]
+- status:
+  - text: This turn failed403 Image generation is not enabled for this group
+  - code: PERMISSION_DENIED
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Generation settings"
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- text: 1 turns 1 steps

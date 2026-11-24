@@ -1,0 +1,5 @@
+BaiLan is unavailable
+The application could not start or stopped unexpectedly.
+Another BaiLan instance (such as dsh web or the desktop app) is running. They cannot start at the same time. Quit the other running BaiLan instance, then restart.
+Exit
+Restart

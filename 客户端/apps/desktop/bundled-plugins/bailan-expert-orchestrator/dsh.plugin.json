@@ -1,0 +1,17 @@
+{
+  "name": "bailan-expert-orchestrator",
+  "description": "白岚专家提供 — multi-agent orchestration agent preset for DeepSeek Harness (dsh). 专家编排模式：多智能体任务编排，分诊、PM 先行规划、合并花名册专家委派、依赖 DAG 任务板、消息总线并行落盘、分级交付门禁、经验池沉淀。",
+  "version": "2.9.8",
+  "entry": {
+    "name": "bailan-expert-orchestrator",
+    "inject": ["tools", "subagents", "systemPrompt"]
+  },
+  "client": {
+    "platform": "any"
+  },
+  "preset": {
+    "targetDir": "~/.dsh/.agent-presets/expert-orchestrator",
+    "files": ["agent.cordis.yml", "preset.yml"],
+    "bundles": ["skills/expert-orchestration"]
+  }
+}

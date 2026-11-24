@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/api/relay-controller/README.md
+/:
+  en: dde0655cdda6f0b4
+  zh: 0a46ee8f5d3a9e67
+/deepseek-ai-dsh-api-relay-controller:
+  en: e145b18ffcbdb8ec
+  zh: 7553a19efd1fd144
+/deepseek-ai-dsh-api-relay-controller/summary:
+  en: 05d8743de415521e
+  zh: ac1feb05fa75c83b
+/deepseek-ai-dsh-api-relay-controller/table-of-contents:
+  en: 2fee9973f19f9401
+  zh: be4649a45bb273d9
+/deepseek-ai-dsh-api-relay-controller/use-this-package:
+  en: 39943a362446b9dc
+  zh: 452301c3d158a9b5
+/deepseek-ai-dsh-api-relay-controller/understand-the-implementation:
+  en: daa7f508f00be5ca
+  zh: ac159846a62fd055
+/deepseek-ai-dsh-api-relay-controller/model-experience:
+  en: dbfcf648940a00d4
+  zh: 4780e2ca4a2ae3ea
+/deepseek-ai-dsh-api-relay-controller/model-experience/kv-cache-effect:
+  en: ca3015e252db0114
+  zh: ebca9253cf15e8e9
+/deepseek-ai-dsh-api-relay-controller/known-limitations-and-deferred-work:
+  en: b1de2eeb77d11629
+  zh: b835d5afac0c5076
