@@ -171,11 +171,19 @@ The selector must be a pure function of the owner currency. Its non-null return 
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as this package renders browser state and sends user-admitted inputs through Session Controller APIs without constructing model requests.
+### Request context and condition
+
+#### What the model sees
+
+In Settings → General → User prompt, the user can save a multiline preference for their chats. The Host includes the saved text as a user-role message alongside the owner’s next and subsequent chat submissions. Saving an empty field turns the preference off for future submissions. Earlier messages keep the text that was sent with them.
+
+#### Token effect
+
+Each submission with an active preference adds the tokens for that text.
 
 #### KV Cache effect
 
-None; Conversation assembly and browser input state do not alter provider-side prompt caching.
+Changing the preference affects new user messages. Earlier requests retain their original prefix.
 
 ## Known Limitations and Deferred Work
 

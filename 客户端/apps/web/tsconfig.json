@@ -148,6 +148,7 @@
     "tests/present-svg.e2e.ts",
     "tests/composer-draft-scroll.e2e.ts",
     "tests/composer-history.e2e.ts",
+    "tests/user-prompt-settings.e2e.ts",
     "tests/composer-focus.e2e.ts",
     "tests/composer-placeholder.e2e.ts",
     "tests/context-meter.e2e.ts",

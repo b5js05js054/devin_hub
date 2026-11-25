@@ -31,6 +31,10 @@
   - button "Edit shortcuts"
   - text: Send behavior while busy What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior
   - button "Queue"
+  - text: User prompt This prompt is sent as a user message each time you send a chat message. Clear it and save to turn it off.
+  - textbox "User prompt"
+  - status
+  - button "Save" [disabled]
   - text: Performance & usage Choose how much performance and usage information to show
   - button "Detailed"
   - text: Upload Session Log when using the official model API Help improve DeepSeek models and products.

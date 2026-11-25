@@ -9,14 +9,19 @@ import {
 
 
 describe('ui-conversation host', () => {
-  it('registers, validates, and disposes the durable busy-Enter preference', async () => {
+  it('defaults an old settings section and validates live changes to both preferences', async () => {
     const ctx = new Context()
     const configuration = await liveConfig(ctx, { Config, apply })
     const { fiber } = configuration
-    expect(plainConfig(configuration.fiber.config)).toEqual({ busyEnter: DEFAULT_BUSY_ENTER_BEHAVIOR })
+    expect(plainConfig(fiber.config)).toEqual({ busyEnter: DEFAULT_BUSY_ENTER_BEHAVIOR, userPrompt: '' })
     await configuration.update({ busyEnter: 'steer' })
-    expect(plainConfig(configuration.fiber.config)).toEqual({ busyEnter: 'steer' })
+    expect(plainConfig(fiber.config)).toEqual({ busyEnter: 'steer', userPrompt: '' })
+    await configuration.update({ userPrompt: '第一行\n第二行' })
+    expect(plainConfig(fiber.config)).toEqual({ busyEnter: 'steer', userPrompt: '第一行\n第二行' })
     await expect(configuration.update({ busyEnter: 'invalid' })).rejects.toThrow()
+    await expect(configuration.update({ userPrompt: 123 })).rejects.toThrow()
+    await configuration.update({ userPrompt: '' })
+    expect(plainConfig(fiber.config)).toEqual({ busyEnter: 'steer', userPrompt: '' })
     await fiber.dispose()
   })
 })

@@ -36,6 +36,8 @@ import { ComposerSubmissionPolicy } from './input/submission-policy.ts'
 import { queueDockEntry } from './queue/QueueDock.tsx'
 import { EnterBehaviorRow } from './settings/EnterBehaviorRow.tsx'
 import type { EnterBehaviorRowInjected } from './settings/EnterBehaviorRow.tsx'
+import { UserPromptRow, UserPromptToast, type UserPromptRowInjected } from './settings/UserPromptRow.tsx'
+import { createUserPromptSaveStore } from './settings/user-prompt-save.ts'
 import { ConversationRoot } from './skeleton/ConversationRoot.tsx'
 import { ConversationContent } from './skeleton/ConversationContent.tsx'
 import { ConversationPanel } from './skeleton/ConversationPanel.tsx'
@@ -46,7 +48,7 @@ import { todoDockEntry } from './skeleton/TodoPanel.tsx'
 import { installStopShortcut } from './stop-shortcut.ts'
 import { TRAJECTORY_VIEW_ID, resolveActiveView } from './view-selection.ts'
 import { en, NS, zh, type ConversationKey } from './locales.ts'
-import { CONVERSATION_SETTINGS_NAMESPACE, type ConversationSettings } from '../submission-settings.ts'
+import { CONVERSATION_SETTINGS_NAMESPACE, USER_PROMPT_FIELD, type ConversationSettings } from '../submission-settings.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -187,22 +189,32 @@ export function apply(ctx: Context, config: Config = Config({})): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-conversation: dictionaries')
   const t = ctx.locale.bind(NS)
   const conversationStore = createConversationStore()
-  const submissionPolicy = new ComposerSubmissionPolicy(
-    ctx.configForms.get<ConversationSettings>(CONVERSATION_SETTINGS_NAMESPACE),
-  )
+  const conversationForm = ctx.configForms.get<ConversationSettings>(CONVERSATION_SETTINGS_NAMESPACE)
+  const submissionPolicy = new ComposerSubmissionPolicy(conversationForm)
+  const promptSave = createUserPromptSaveStore()
 
   ctx.effect(() => () => { submissionPolicy.dispose() })
 
-  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
-    name: 'settings.general.item',
-    id: 'composer-enter',
-    order: 20,
-    locale: NS,
-    inject: (): EnterBehaviorRowInjected => ({
-      hooks: { busyEnter: submissionPolicy.busyEnter },
-      setBusyEnter: (behavior) => { submissionPolicy.setBusyEnter(behavior) },
-    }),
-  }, EnterBehaviorRow))
+  slots.inject('settings.general.item', function* () {
+    yield slots.register({
+      name: 'settings.general.item', id: 'composer-enter', order: 20, locale: NS,
+      inject: (): EnterBehaviorRowInjected => ({
+        hooks: { busyEnter: submissionPolicy.busyEnter },
+        setBusyEnter: (behavior) => { submissionPolicy.setBusyEnter(behavior) },
+      }),
+    }, EnterBehaviorRow)
+    yield slots.register({
+      name: 'settings.general.item', id: 'user-prompt', order: 21, locale: NS, store: promptSave,
+      inject: (): UserPromptRowInjected => ({
+        hooks: { promptSettings: conversationForm, settingsRead: ctx.configForms.describe() },
+        saveUserPrompt: text => conversationForm.set(USER_PROMPT_FIELD, text),
+        retryRead: () => ctx.configForms.describe().ensure(),
+      }),
+    }, UserPromptRow)
+  })
+  slots.inject('shell.overlay', () => slots.register({
+    name: 'shell.overlay', id: 'user-prompt-save', locale: NS, store: promptSave,
+  }, UserPromptToast))
 
   const viewTabs = (): ViewTab[] => {
     const tabs: ViewTab[] = []

@@ -29,6 +29,7 @@ async function bench(options: { declareConversation?: boolean } = {}) {
     await runtime.root.declare({
       'main': { kind: 'keyed', scope: 'root' },
       'settings.general.item': { kind: 'list', scope: 'root' },
+      'shell.overlay': { kind: 'list', scope: 'root' },
     }, (_props: { renderSlot?: unknown }) => null)
   }
   const feature = await runtime.mount({ inject: [...inject], apply })
@@ -90,7 +91,7 @@ describe('target-neutral Conversation apply wiring', () => {
     await b.runtime.dispose()
   })
 
-  it('owns shell slots and shares only the Conversation store', async () => {
+  it('shares the Conversation store between its Session views and registers the General preferences in order', async () => {
     const b = await bench()
     const session = entry(b.runtime, 'conversation.session')
     const header = entry(b.runtime, 'conversation.session.header')
@@ -101,7 +102,8 @@ describe('target-neutral Conversation apply wiring', () => {
     expect(b.runtime.slots.spec('conversation.composer'))
       .toEqual({ kind: 'chain', scope: 'session' })
     expect(b.runtime.slots.entries('settings.general.item').map(row => row.options.id))
-      .toEqual(['composer-enter'])
+      .toEqual(['composer-enter', 'user-prompt'])
+    expect(b.runtime.slots.entries('shell.overlay').map(row => row.options.id)).toContain('user-prompt-save')
     await b.runtime.dispose()
   })
 
@@ -145,6 +147,8 @@ describe('target-neutral Conversation apply wiring', () => {
     expect(b.runtime.slots.entries('main.conversation')).toHaveLength(0)
     expect(b.runtime.slots.spec('main.conversation')).toBeUndefined()
     expect(b.runtime.slots.spec('conversation.view')).toBeUndefined()
+    expect(b.runtime.slots.entries('settings.general.item')).toHaveLength(0)
+    expect(b.runtime.slots.entries('shell.overlay')).toHaveLength(0)
     await b.runtime.dispose()
   })
 })
